@@ -12,7 +12,8 @@
     "about": "À propos"
   },
   "search": {
-    "placeholder": "Rechercher dans les paramètres..."
+    "placeholder": "Rechercher dans les paramètres...",
+    "noResults": "Aucun résultat"
   },
   "general": {
     "appearance": "Apparence",

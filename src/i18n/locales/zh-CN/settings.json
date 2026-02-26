@@ -12,7 +12,8 @@
     "about": "关于"
   },
   "search": {
-    "placeholder": "搜索设置..."
+    "placeholder": "搜索设置...",
+    "noResults": "未找到结果"
   },
   "general": {
     "appearance": "外观",
