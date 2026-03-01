@@ -29,6 +29,7 @@ import {
 import { SimpleMarkdown } from '@/components/ui/simple-markdown';
 import { useAI } from '@/contexts/AIContext';
 import { useDownload } from '@/contexts/DownloadContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import { LANGUAGE_OPTIONS, type SummaryStyle } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -171,7 +172,7 @@ export function SummaryPage() {
       });
     } catch (err) {
       if (isCancelledRef.current) return;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = localizeUnknownError(err);
       setError(message);
     } finally {
       if (!isCancelledRef.current) {
@@ -229,7 +230,7 @@ export function SummaryPage() {
       });
       setSaved(true);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = localizeUnknownError(err);
       console.error('Failed to save to library:', message);
       setError(t('summary.errors.saveToLibrary', { message }));
     }

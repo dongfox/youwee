@@ -3,6 +3,7 @@ import { Loader2, Sparkles, X } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import { cn } from '@/lib/utils';
 
 interface GrammarFixDialogProps {
@@ -101,7 +102,7 @@ export function GrammarFixDialog({ open, onClose }: GrammarFixDialogProps) {
       if (String(err).includes(GRAMMAR_CANCELLED_ERROR)) {
         return;
       }
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       if (activeRunIdRef.current === runId) {
         setIsFixing(false);

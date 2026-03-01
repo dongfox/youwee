@@ -12,7 +12,8 @@
     "about": "About"
   },
   "search": {
-    "placeholder": "Search settings..."
+    "placeholder": "Search settings...",
+    "noResults": "No results found"
   },
   "general": {
     "appearance": "Appearance",

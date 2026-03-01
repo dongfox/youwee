@@ -347,7 +347,17 @@ fn get_tray_lang() -> String {
 /// Translate a tray menu key based on the current language
 fn tray_text(key: &str) -> &'static str {
     let lang = get_tray_lang();
-    let lang = if lang.is_empty() || lang.starts_with("en") { "en" } else { lang.as_str() };
+    let lang = if lang.is_empty() || lang.starts_with("en") {
+        "en"
+    } else if lang.starts_with("vi") {
+        "vi"
+    } else if lang.starts_with("zh") {
+        "zh-CN"
+    } else if lang.starts_with("fr") {
+        "fr"
+    } else {
+        "en"
+    };
 
     match (lang, key) {
         // Vietnamese
@@ -370,6 +380,16 @@ fn tray_text(key: &str) -> &'static str {
         ("zh-CN", "open") => "打开 Youwee",
         ("zh-CN", "browser_extension") => "浏览器扩展",
         ("zh-CN", "quit") => "退出",
+        // French
+        ("fr", "followed_channels") => "Chaines suivies",
+        ("fr", "no_channels") => "Aucune chaine suivie",
+        ("fr", "new_suffix") => "nouvelles",
+        ("fr", "check_all") => "Verifier les chaines suivies maintenant",
+        ("fr", "settings") => "Parametres",
+        ("fr", "check_update") => "Verifier les mises a jour...",
+        ("fr", "open") => "Ouvrir Youwee",
+        ("fr", "browser_extension") => "Extension navigateur",
+        ("fr", "quit") => "Quitter",
         // English (default)
         (_, "followed_channels") => "Followed Channels",
         (_, "no_channels") => "No channels followed",

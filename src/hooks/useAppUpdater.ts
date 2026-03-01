@@ -8,6 +8,7 @@ export interface UpdateInfo {
   body?: string;
   bodyVi?: string;
   bodyZhCN?: string;
+  bodyFr?: string;
   date?: string;
 }
 
@@ -46,6 +47,7 @@ export function useAppUpdater() {
           body: update.body ?? undefined,
           bodyVi: (raw.notes_vi as string) || undefined,
           bodyZhCN: (raw['notes_zh-CN'] as string) || undefined,
+          bodyFr: (raw.notes_fr as string) || undefined,
           date: update.date ?? undefined,
         });
         setStatus('available');

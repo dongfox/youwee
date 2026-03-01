@@ -1,3 +1,5 @@
+import { isNonRetryableBackendError, isRetryableBackendError } from '@/lib/backend-error';
+
 const RETRYABLE_PATTERNS = [
   /timed?\s*out/i,
   /timeout/i,
@@ -64,15 +66,17 @@ export function normalizeErrorMessage(error: unknown): string {
   }
 }
 
-export function isNonRetryableError(message: string): boolean {
+export function isNonRetryableError(message: string, code?: string): boolean {
   const text = message.trim();
   if (!text) return false;
+  if (isNonRetryableBackendError(text, code)) return true;
   return NON_RETRYABLE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-export function isRetryableError(message: string): boolean {
+export function isRetryableError(message: string, code?: string, retryable?: boolean): boolean {
   const text = message.trim();
-  if (!text || isNonRetryableError(text)) return false;
+  if (!text || isNonRetryableError(text, code)) return false;
+  if (isRetryableBackendError(text, code, retryable)) return true;
   return RETRYABLE_PATTERNS.some((pattern) => pattern.test(text));
 }
 

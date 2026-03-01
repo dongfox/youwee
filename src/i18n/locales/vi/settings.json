@@ -12,7 +12,8 @@
     "about": "Giới thiệu"
   },
   "search": {
-    "placeholder": "Tìm kiếm cài đặt..."
+    "placeholder": "Tìm kiếm cài đặt...",
+    "noResults": "Không có kết quả"
   },
   "general": {
     "appearance": "Giao diện",

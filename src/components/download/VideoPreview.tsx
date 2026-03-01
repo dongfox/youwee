@@ -13,6 +13,7 @@ import {
 import { useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { localizeUnknownError } from '@/lib/backend-error';
 import type { CookieSettings, ProxySettings } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -188,7 +189,7 @@ export function VideoPreview({ url, onClose, onFormatSelect, className }: VideoP
         }
       } catch (err) {
         if (!cancelled) {
-          setError(String(err));
+          setError(localizeUnknownError(err));
         }
       } finally {
         if (!cancelled) {

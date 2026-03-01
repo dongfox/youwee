@@ -18,7 +18,7 @@ use tauri_plugin_shell::process::CommandEvent;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::types::DownloadProgress;
+use crate::types::{BackendError, DownloadProgress};
 use crate::database::add_log_internal;
 use crate::database::add_history_internal;
 use crate::database::update_history_download;
@@ -77,7 +77,7 @@ fn recent_output_snapshot(buffer: &Arc<Mutex<VecDeque<String>>>) -> Vec<String> 
         .unwrap_or_default()
 }
 
-fn build_download_error_message(exit_code: Option<i32>, recent_lines: &[String]) -> String {
+fn build_download_error_message(exit_code: Option<i32>, recent_lines: &[String]) -> BackendError {
     let reason = recent_lines
         .iter()
         .rev()
@@ -96,8 +96,9 @@ fn build_download_error_message(exit_code: Option<i32>, recent_lines: &[String])
         .unwrap_or_else(|| "Unknown error".to_string());
 
     match exit_code {
-        Some(code) => format!("Download failed (exit code {}): {}", code, reason),
-        None => format!("Download failed: {}", reason),
+        Some(code) => BackendError::from_message(format!("Download failed (exit code {}): {}", code, reason))
+            .with_param("exitCode", code),
+        None => BackendError::from_message(format!("Download failed: {}", reason)),
     }
 }
 
@@ -148,10 +149,11 @@ pub async fn download_video(
     source: Option<String>,
 ) -> Result<(), String> {
     CANCEL_FLAG.store(false, Ordering::SeqCst);
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let should_log_stderr = log_stderr.unwrap_or(true);
-    let sanitized_path = sanitize_output_path(&output_path)?;
+    let sanitized_path =
+        sanitize_output_path(&output_path).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     let format_string = build_format_string(&quality, &format, &video_codec);
     let output_template = format!("{}/%(title)s.%(ext)s", sanitized_path);
     
@@ -368,7 +370,7 @@ pub async fn download_video(
         cmd.hide_window();
         
         let process = cmd.spawn()
-            .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
         
         return handle_tokio_download(app, id, process, quality, format, url, should_log_stderr, title, thumbnail, source, download_sections).await;
     }
@@ -381,7 +383,7 @@ pub async fn download_video(
             let (mut rx, child) = sidecar
                 .args(&args)
                 .spawn()
-                .map_err(|e| format!("Failed to start bundled yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to start bundled yt-dlp: {}", e)).to_wire_string())?;
             
             // Only use frontend title if it's not a URL (placeholder)
             let mut current_title: Option<String> = title.clone().filter(|t| !t.starts_with("http"));
@@ -409,7 +411,7 @@ pub async fn download_video(
                 if CANCEL_FLAG.load(Ordering::SeqCst) {
                     child.kill().ok();
                     kill_all_download_processes();
-                    return Err("Download cancelled".to_string());
+                    return Err(BackendError::from_message("Download cancelled").to_wire_string());
                 }
                 
                 match event {
@@ -500,6 +502,8 @@ pub async fn download_video(
                                 resolution: None,
                                 format_ext: None,
                                 error_message: None,
+                                error_code: None,
+                                error_params: None,
                                 downloaded_size,
                                 elapsed_time,
                             };
@@ -527,6 +531,8 @@ pub async fn download_video(
                                 resolution: None,
                                 format_ext: None,
                                 error_message: None,
+                                error_code: None,
+                                error_params: None,
                                 downloaded_size,
                                 elapsed_time,
                             };
@@ -538,14 +544,14 @@ pub async fn download_video(
                         }
                     }
                     CommandEvent::Error(err) => {
-                        let error_msg = format!("Process error: {}", err);
-                        add_log_internal("error", &error_msg, None, Some(&url)).ok();
-                        return Err(error_msg);
+                        let error = BackendError::from_message(format!("Process error: {}", err));
+                        add_log_internal("error", error.message(), None, Some(&url)).ok();
+                        return Err(error.to_wire_string());
                     }
                     CommandEvent::Terminated(status) => {
                         if CANCEL_FLAG.load(Ordering::SeqCst) {
                             add_log_internal("info", "Download cancelled by user", None, Some(&url)).ok();
-                            return Err("Download cancelled".to_string());
+                            return Err(BackendError::from_message("Download cancelled").to_wire_string());
                         }
                         
                         if status.code == Some(0) {
@@ -633,6 +639,8 @@ pub async fn download_video(
                                 resolution: quality_display.clone(),
                                 format_ext: Some(format.clone()),
                                 error_message: None,
+                                error_code: None,
+                                error_params: None,
                                 downloaded_size: None,
                                 elapsed_time: None,
                             };
@@ -640,8 +648,8 @@ pub async fn download_video(
                             return Ok(());
                         } else {
                             let recent_lines: Vec<String> = recent_output.iter().cloned().collect();
-                            let error_msg = build_download_error_message(status.code, &recent_lines);
-                            add_log_internal("error", &error_msg, None, Some(&url)).ok();
+                            let error = build_download_error_message(status.code, &recent_lines);
+                            add_log_internal("error", error.message(), None, Some(&url)).ok();
                             
                             // Emit error progress so frontend can display error message
                             let progress = DownloadProgress {
@@ -656,13 +664,15 @@ pub async fn download_video(
                                 filesize: None,
                                 resolution: None,
                                 format_ext: None,
-                                error_message: Some(error_msg.clone()),
+                                error_message: Some(error.message().to_string()),
+                                error_code: Some(error.code().to_string()),
+                                error_params: error.params().cloned(),
                                 downloaded_size: None,
                                 elapsed_time: None,
                             };
                             app.emit("download-progress", progress).ok();
                             
-                            return Err(error_msg);
+                            return Err(error.to_wire_string());
                         }
                     }
                     _ => {}
@@ -679,7 +689,7 @@ pub async fn download_video(
             cmd.hide_window();
             
             let process = cmd.spawn()
-                .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
             
             handle_tokio_download(app, id, process, quality, format, url, should_log_stderr, title, thumbnail, source, download_sections).await
         }
@@ -699,7 +709,10 @@ async fn handle_tokio_download(
     source: Option<String>,
     download_sections: Option<String>,
 ) -> Result<(), String> {
-    let stdout = process.stdout.take().ok_or("Failed to get stdout")?;
+    let stdout = process
+        .stdout
+        .take()
+        .ok_or_else(|| BackendError::from_message("Failed to get stdout").to_wire_string())?;
     let stderr = process.stderr.take();
     let mut stdout_reader = BufReader::new(stdout).lines();
     
@@ -754,6 +767,8 @@ async fn handle_tokio_download(
                         resolution: None,
                         format_ext: None,
                         error_message: None,
+                        error_code: None,
+                        error_params: None,
                         downloaded_size,
                         elapsed_time,
                     };
@@ -775,7 +790,7 @@ async fn handle_tokio_download(
         if CANCEL_FLAG.load(Ordering::SeqCst) {
             process.kill().await.ok();
             kill_all_download_processes();
-            return Err("Download cancelled".to_string());
+            return Err(BackendError::from_message("Download cancelled").to_wire_string());
         }
         push_recent_output_shared(&recent_output, &line);
         
@@ -797,6 +812,8 @@ async fn handle_tokio_download(
                 resolution: None,
                 format_ext: None,
                 error_message: None,
+                error_code: None,
+                error_params: None,
                 downloaded_size,
                 elapsed_time,
             };
@@ -858,7 +875,10 @@ async fn handle_tokio_download(
         task.abort(); // Stop reading stderr when stdout is done
     }
     
-    let status = process.wait().await.map_err(|e| format!("Process error: {}", e))?;
+    let status = process
+        .wait()
+        .await
+        .map_err(|e| BackendError::from_message(format!("Process error: {}", e)).to_wire_string())?;
     
     if status.success() {
         let actual_filesize = final_filepath.as_ref()
@@ -932,6 +952,8 @@ async fn handle_tokio_download(
             resolution: quality_display,
             format_ext: Some(format),
             error_message: None,
+            error_code: None,
+            error_params: None,
             downloaded_size: None,
             elapsed_time: None,
         };
@@ -939,8 +961,8 @@ async fn handle_tokio_download(
         Ok(())
     } else {
         let recent_lines = recent_output_snapshot(&recent_output);
-        let error_msg = build_download_error_message(status.code(), &recent_lines);
-        add_log_internal("error", &error_msg, None, Some(&url)).ok();
+        let error = build_download_error_message(status.code(), &recent_lines);
+        add_log_internal("error", error.message(), None, Some(&url)).ok();
         
         // Emit error progress so frontend can display error message
         let progress = DownloadProgress {
@@ -955,13 +977,15 @@ async fn handle_tokio_download(
             filesize: None,
             resolution: None,
             format_ext: None,
-            error_message: Some(error_msg.clone()),
+            error_message: Some(error.message().to_string()),
+            error_code: Some(error.code().to_string()),
+            error_params: error.params().cloned(),
             downloaded_size: None,
             elapsed_time: None,
         };
         app.emit("download-progress", progress).ok();
         
-        Err(error_msg)
+        Err(error.to_wire_string())
     }
 }
 

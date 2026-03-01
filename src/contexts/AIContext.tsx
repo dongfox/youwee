@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { localizeUnknownError } from '@/lib/backend-error';
 import type {
   AIConfig,
   AIProvider as AIProviderType,
@@ -63,24 +64,7 @@ function buildProxyUrl(settings: ProxySettings): string | undefined {
 }
 
 function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (typeof error === 'string') {
-    return error;
-  }
-
-  try {
-    const serialized = JSON.stringify(error);
-    if (serialized && serialized !== '{}') {
-      return serialized;
-    }
-  } catch {
-    // ignore serialization errors
-  }
-
-  return String(error);
+  return localizeUnknownError(error);
 }
 
 // Task status for background summary generation
@@ -222,7 +206,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       const message = await invoke<string>('test_ai_connection', { config });
       setTestResult({ success: true, message });
     } catch (error) {
-      setTestResult({ success: false, message: String(error) });
+      setTestResult({ success: false, message: extractErrorMessage(error) });
     } finally {
       setIsTesting(false);
     }
@@ -431,7 +415,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           // Complete
           updateTask(historyId, { status: 'completed', summary });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = extractErrorMessage(error);
           console.error(`[AI] Task failed for historyId=${historyId}:`, message);
           updateTask(historyId, { status: 'error', error: message });
         } finally {
@@ -527,7 +511,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           // Complete
           updateTask(taskId, { status: 'completed', summary });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = extractErrorMessage(error);
           console.error(`[AI] Queue task failed for taskId=${taskId}:`, message);
           updateTask(taskId, { status: 'error', error: message });
         } finally {

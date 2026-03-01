@@ -5,6 +5,7 @@ import { FolderOpen, ListPlus, Loader2, Sparkles, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import {
   detectFormatFromFilename,
   generateEntryId,
@@ -94,7 +95,7 @@ export function SubtitleBatchProjectDialog({ open, onClose }: SubtitleBatchProje
       }
       setStatus(t('batchProject.convertDone', { count: successCount }));
     } catch (err) {
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsRunning(false);
     }
@@ -154,7 +155,7 @@ export function SubtitleBatchProjectDialog({ open, onClose }: SubtitleBatchProje
         }),
       );
     } catch (err) {
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsRunning(false);
     }

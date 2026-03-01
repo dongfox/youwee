@@ -4,7 +4,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 use tokio::process::Command;
-use crate::types::{YtdlpVersionInfo, YtdlpChannel, YtdlpChannelInfo, YtdlpAllVersions};
+use crate::types::{BackendError, YtdlpVersionInfo, YtdlpChannel, YtdlpChannelInfo, YtdlpAllVersions};
 use crate::utils::CommandExt;
 
 const CHANNEL_CONFIG_FILE: &str = "ytdlp-channel.txt";
@@ -27,16 +27,16 @@ pub async fn get_ytdlp_channel(app: &AppHandle) -> YtdlpChannel {
 /// Save the yt-dlp channel to config file
 pub async fn set_ytdlp_channel(app: &AppHandle, channel: &YtdlpChannel) -> Result<(), String> {
     let config_path = get_channel_config_path(app)
-        .ok_or("Failed to get config path")?;
+        .ok_or_else(|| BackendError::from_message("Failed to get config path").to_wire_string())?;
     
     // Ensure bin directory exists
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await
-            .map_err(|e| format!("Failed to create bin directory: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Failed to create bin directory: {}", e)).to_wire_string())?;
     }
     
     tokio::fs::write(&config_path, channel.as_str()).await
-        .map_err(|e| format!("Failed to save channel config: {}", e))?;
+        .map_err(|e| BackendError::from_message(format!("Failed to save channel config: {}", e)).to_wire_string())?;
     
     Ok(())
 }
@@ -240,7 +240,7 @@ pub async fn run_ytdlp_with_stderr(app: &AppHandle, args: &[&str]) -> Result<Ytd
         cmd.hide_window();
         
         let output = cmd.output().await
-            .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Failed to run yt-dlp: {}", e)).to_wire_string())?;
         
         return Ok(YtdlpOutput {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -257,7 +257,7 @@ pub async fn run_ytdlp_with_stderr(app: &AppHandle, args: &[&str]) -> Result<Ytd
             let (mut rx, _child) = sidecar
                 .args(args)
                 .spawn()
-                .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
             
             let mut stdout = String::new();
             let mut stderr = String::new();
@@ -272,7 +272,7 @@ pub async fn run_ytdlp_with_stderr(app: &AppHandle, args: &[&str]) -> Result<Ytd
                         stderr.push_str(&String::from_utf8_lossy(&bytes));
                     }
                     CommandEvent::Error(err) => {
-                        return Err(format!("Process error: {}", err));
+                        return Err(BackendError::from_message(format!("Process error: {}", err)).to_wire_string());
                     }
                     CommandEvent::Terminated(status) => {
                         success = status.code == Some(0);
@@ -292,7 +292,7 @@ pub async fn run_ytdlp_with_stderr(app: &AppHandle, args: &[&str]) -> Result<Ytd
             cmd.hide_window();
             
             let output = cmd.output().await
-                .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to run yt-dlp: {}", e)).to_wire_string())?;
             
             Ok(YtdlpOutput {
                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -303,8 +303,8 @@ pub async fn run_ytdlp_with_stderr(app: &AppHandle, args: &[&str]) -> Result<Ytd
     }
 }
 
-/// Parse yt-dlp stderr for common errors and return user-friendly message
-pub fn parse_ytdlp_error(stderr: &str) -> Option<String> {
+/// Parse yt-dlp stderr for common errors and return structured backend error
+pub fn parse_ytdlp_error(stderr: &str) -> Option<BackendError> {
     let stderr_lower = stderr.to_lowercase();
 
     // Browser cookie database locked / unavailable
@@ -313,8 +313,9 @@ pub fn parse_ytdlp_error(stderr: &str) -> Option<String> {
         && stderr_lower.contains("database")
     {
         return Some(
-            "Browser cookie database is locked. Please close browser windows and retry, or switch to Cookie File mode in Settings → Network."
-                .to_string(),
+            BackendError::from_message(
+                "Browser cookie database is locked. Please close browser windows and retry, or switch to Cookie File mode in Settings → Network."
+            ),
         );
     }
 
@@ -323,55 +324,56 @@ pub fn parse_ytdlp_error(stderr: &str) -> Option<String> {
         || (stderr_lower.contains("douyin") && stderr_lower.contains("cookies") && stderr_lower.contains("needed"))
     {
         return Some(
-            "This Douyin/TikTok content requires fresh login cookies. Please refresh login in browser cookie mode, then retry."
-                .to_string(),
+            BackendError::from_message(
+                "This Douyin/TikTok content requires fresh login cookies. Please refresh login in browser cookie mode, then retry."
+            ),
         );
     }
     
     // Rate limiting
     if stderr_lower.contains("429") || stderr_lower.contains("too many requests") {
-        return Some("YouTube rate limited. Please wait a few minutes before trying again.".to_string());
+        return Some(BackendError::from_message("YouTube rate limited. Please wait a few minutes before trying again."));
     }
     
     // Video unavailable
     if stderr_lower.contains("video unavailable") {
-        return Some("This video is unavailable.".to_string());
+        return Some(BackendError::from_message("This video is unavailable."));
     }
     
     // Private video - needs authentication
     if stderr_lower.contains("private video") {
-        return Some("This video is private. Please enable authentication in Settings → Video Authentication to access it.".to_string());
+        return Some(BackendError::from_message("This video is private. Please enable authentication in Settings → Video Authentication to access it."));
     }
     
     // Age restricted
     if stderr_lower.contains("age-restricted") || stderr_lower.contains("sign in to confirm your age") {
-        return Some("This video is age-restricted. Please enable authentication in Settings → Video Authentication to access it.".to_string());
+        return Some(BackendError::from_message("This video is age-restricted. Please enable authentication in Settings → Video Authentication to access it."));
     }
     
     // Members-only / subscription required
     if stderr_lower.contains("members-only") || stderr_lower.contains("member-only") || stderr_lower.contains("join this channel") {
-        return Some("This video is for channel members only. Please enable authentication in Settings → Video Authentication with a subscribed account.".to_string());
+        return Some(BackendError::from_message("This video is for channel members only. Please enable authentication in Settings → Video Authentication with a subscribed account."));
     }
     
     // Login required (generic)
     if stderr_lower.contains("sign in") || stderr_lower.contains("login required") || stderr_lower.contains("cookies") && stderr_lower.contains("required") {
-        return Some("This video requires sign-in. Please enable authentication in Settings → Video Authentication to access it.".to_string());
+        return Some(BackendError::from_message("This video requires sign-in. Please enable authentication in Settings → Video Authentication to access it."));
     }
     
     // Geographic restriction
     if stderr_lower.contains("not available in your country") || stderr_lower.contains("geo") {
-        return Some("This video is not available in your region.".to_string());
+        return Some(BackendError::from_message("This video is not available in your region."));
     }
     
     // No subtitles
     if stderr_lower.contains("no subtitles") || stderr_lower.contains("subtitles are disabled") {
-        return Some("This video has no subtitles available.".to_string());
+        return Some(BackendError::from_message("This video has no subtitles available."));
     }
     
     // Network errors
     if stderr_lower.contains("unable to download") || stderr_lower.contains("connection") {
         if let Some(line) = stderr.lines().find(|l| l.to_lowercase().contains("error")) {
-            return Some(format!("Download error: {}", line.trim()));
+            return Some(BackendError::from_message(format!("Download error: {}", line.trim())));
         }
     }
     
@@ -389,14 +391,14 @@ pub async fn run_ytdlp_json(app: &AppHandle, args: &[&str]) -> Result<String, St
         cmd.hide_window();
         
         let output = cmd.output().await
-            .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Failed to run yt-dlp: {}", e)).to_wire_string())?;
         
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if let Some(parsed_error) = parse_ytdlp_error(&stderr) {
-                return Err(parsed_error);
+                return Err(parsed_error.to_wire_string());
             }
-            return Err("yt-dlp command failed".to_string());
+            return Err(BackendError::from_message("yt-dlp command failed").to_wire_string());
         }
         
         return Ok(String::from_utf8_lossy(&output.stdout).to_string());
@@ -410,7 +412,7 @@ pub async fn run_ytdlp_json(app: &AppHandle, args: &[&str]) -> Result<String, St
             let (mut rx, _child) = sidecar
                 .args(args)
                 .spawn()
-                .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
             
             let mut output = String::new();
             let mut stderr_output = String::new();
@@ -424,15 +426,15 @@ pub async fn run_ytdlp_json(app: &AppHandle, args: &[&str]) -> Result<String, St
                         stderr_output.push_str(&String::from_utf8_lossy(&bytes));
                     }
                     CommandEvent::Error(err) => {
-                        return Err(format!("Process error: {}", err));
+                        return Err(BackendError::from_message(format!("Process error: {}", err)).to_wire_string());
                     }
                     CommandEvent::Terminated(status) => {
                         if status.code != Some(0) {
                             // Parse stderr for user-friendly error
                             if let Some(parsed_error) = parse_ytdlp_error(&stderr_output) {
-                                return Err(parsed_error);
+                                return Err(parsed_error.to_wire_string());
                             }
-                            return Err("yt-dlp command failed".to_string());
+                            return Err(BackendError::from_message("yt-dlp command failed").to_wire_string());
                         }
                     }
                     _ => {}
@@ -450,15 +452,15 @@ pub async fn run_ytdlp_json(app: &AppHandle, args: &[&str]) -> Result<String, St
             cmd.hide_window();
             
             let output = cmd.output().await
-                .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to run yt-dlp: {}", e)).to_wire_string())?;
             
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 // Parse stderr for user-friendly error
                 if let Some(parsed_error) = parse_ytdlp_error(&stderr) {
-                    return Err(parsed_error);
+                    return Err(parsed_error.to_wire_string());
                 }
-                return Err("yt-dlp command failed".to_string());
+                return Err(BackendError::from_message("yt-dlp command failed").to_wire_string());
             }
             
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -477,7 +479,7 @@ pub async fn get_ytdlp_version_internal(app: &AppHandle) -> Result<YtdlpVersionI
         cmd.hide_window();
         
         let output = cmd.output().await
-            .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Failed to run yt-dlp: {}", e)).to_wire_string())?;
         
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let bin_path = binary_path.to_string_lossy().to_string();
@@ -499,7 +501,7 @@ pub async fn get_ytdlp_version_internal(app: &AppHandle) -> Result<YtdlpVersionI
             let (mut rx, _child) = sidecar
                 .args(["--version"])
                 .spawn()
-                .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
             
             let mut output = String::new();
             while let Some(event) = rx.recv().await {
@@ -524,7 +526,7 @@ pub async fn get_ytdlp_version_internal(app: &AppHandle) -> Result<YtdlpVersionI
             cmd.hide_window();
             
             let output = cmd.output().await
-                .map_err(|e| format!("yt-dlp not found: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("yt-dlp not found: {}", e)).to_wire_string())?;
             
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             

@@ -11,6 +11,7 @@ use tokio::process::Command;
 
 use crate::database::{add_history_internal, add_log_internal};
 use crate::services::{get_deno_path, get_ffmpeg_path, get_ytdlp_path};
+use crate::types::BackendError;
 use crate::utils::{sanitize_output_path, validate_url, CommandExt};
 
 pub static METADATA_CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
@@ -22,6 +23,8 @@ pub struct MetadataProgress {
     pub title: Option<String>,
     pub thumbnail: Option<String>,
     pub error_message: Option<String>,
+    pub error_code: Option<String>,
+    pub error_params: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -119,9 +122,10 @@ pub async fn fetch_metadata(
     proxy_url: Option<String>,
 ) -> Result<(), String> {
     METADATA_CANCEL_FLAG.store(false, Ordering::SeqCst);
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
 
-    let sanitized_path = sanitize_output_path(&output_path)?;
+    let sanitized_path =
+        sanitize_output_path(&output_path).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     // Use title only without extension - yt-dlp will add .info.json, .description, .jpg etc
     let output_template = format!("{}/%(title)s", sanitized_path);
 
@@ -247,6 +251,8 @@ pub async fn fetch_metadata(
             title: None,
             thumbnail: None,
             error_message: None,
+            error_code: None,
+            error_params: None,
         },
     )
     .ok();
@@ -275,16 +281,16 @@ pub async fn fetch_metadata(
 
         let mut process = cmd
             .spawn()
-            .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
 
         let stdout = process
             .stdout
             .take()
-            .ok_or_else(|| "Failed to capture stdout".to_string())?;
+            .ok_or_else(|| BackendError::from_message("Failed to capture stdout").to_wire_string())?;
         let stderr = process
             .stderr
             .take()
-            .ok_or_else(|| "Failed to capture stderr".to_string())?;
+            .ok_or_else(|| BackendError::from_message("Failed to capture stderr").to_wire_string())?;
 
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
@@ -298,7 +304,7 @@ pub async fn fetch_metadata(
             if METADATA_CANCEL_FLAG.load(Ordering::SeqCst) {
                 process.kill().await.ok();
                 add_log_internal("info", "Metadata fetch cancelled by user", None, Some(&url)).ok();
-                return Err("Metadata fetch cancelled".to_string());
+                return Err(BackendError::from_message("Metadata fetch cancelled").to_wire_string());
             }
 
             tokio::select! {
@@ -323,6 +329,8 @@ pub async fn fetch_metadata(
                                         title: video_title.clone(),
                                         thumbnail: video_thumbnail.clone(),
                                         error_message: None,
+                                        error_code: None,
+                                        error_params: None,
                                     }).ok();
                                 }
                             } else if video_title.is_none() && !text.is_empty() && !text.starts_with("[") {
@@ -333,6 +341,8 @@ pub async fn fetch_metadata(
                                     title: Some(text),
                                     thumbnail: None,
                                     error_message: None,
+                                    error_code: None,
+                                    error_params: None,
                                 }).ok();
                             }
                         }
@@ -361,7 +371,7 @@ pub async fn fetch_metadata(
         let status = process
             .wait()
             .await
-            .map_err(|e| format!("Process error: {}", e))?;
+            .map_err(|e| BackendError::from_message(format!("Process error: {}", e)).to_wire_string())?;
 
         if status.success() {
             let title = video_title.clone().unwrap_or_else(|| "Unknown".to_string());
@@ -443,12 +453,15 @@ pub async fn fetch_metadata(
                     title: video_title,
                     thumbnail: video_thumbnail,
                     error_message: None,
+                    error_code: None,
+                    error_params: None,
                 },
             )
             .ok();
             Ok(())
         } else {
             let err_msg = error_message.unwrap_or_else(|| "Failed to fetch metadata".to_string());
+            let backend_err = BackendError::from_message(err_msg.clone());
             add_log_internal("error", &err_msg, None, Some(&url)).ok();
 
             app.emit(
@@ -459,13 +472,15 @@ pub async fn fetch_metadata(
                     title: video_title,
                     thumbnail: video_thumbnail,
                     error_message: Some(err_msg.clone()),
+                    error_code: Some(backend_err.code().to_string()),
+                    error_params: backend_err.params().cloned(),
                 },
             )
             .ok();
-            Err(err_msg)
+            Err(backend_err.to_wire_string())
         }
     } else {
         add_log_internal("error", "yt-dlp not found", None, Some(&url)).ok();
-        Err("yt-dlp not found".to_string())
+        Err(BackendError::from_message("yt-dlp not found").to_wire_string())
     }
 }

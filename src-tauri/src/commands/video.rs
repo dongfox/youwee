@@ -6,7 +6,7 @@ use tauri_plugin_shell::process::CommandEvent;
 use tokio::process::Command;
 use tokio::time::timeout;
 use uuid::Uuid;
-use crate::types::{VideoInfo, FormatOption, VideoInfoResponse, PlaylistVideoEntry, SubtitleInfo};
+use crate::types::{BackendError, VideoInfo, FormatOption, VideoInfoResponse, PlaylistVideoEntry, SubtitleInfo};
 use crate::services::{parse_ytdlp_error, run_ytdlp_json_with_cookies, run_ytdlp_with_stderr_and_cookies, build_cookie_args, get_deno_path};
 use crate::utils::validate_url;
 use crate::utils::CommandExt;
@@ -48,7 +48,7 @@ pub async fn get_video_transcript(
     #[cfg(debug_assertions)]
     println!("[TRANSCRIPT] Fetching transcript for URL: {}", &url);
     
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     add_log_internal("info", &format!("Fetching transcript for AI summary"), None, Some(&url)).ok();
     
@@ -59,7 +59,7 @@ pub async fn get_video_transcript(
     if let Err(e) = std::fs::create_dir_all(&temp_dir) {
         let error_msg = format!("Failed to create temp directory: {}", e);
         add_log_internal("error", &error_msg, None, Some(&url)).ok();
-        return Err(error_msg);
+        return Err(BackendError::from_message(error_msg).to_wire_string());
     }
     
     let temp_path = temp_dir.join("transcript");
@@ -90,7 +90,7 @@ pub async fn get_video_transcript(
     
     // Track if we hit a rate limit error
     let mut rate_limited = false;
-    let mut specific_error: Option<String> = None;
+    let mut specific_error: Option<BackendError> = None;
     let mut subtitle_files: Vec<std::path::PathBuf> = Vec::new();
     
     for (idx, lang) in lang_list.iter().enumerate() {
@@ -362,17 +362,19 @@ pub async fn get_video_transcript(
     
     // Return specific error message if we detected one
     let error_msg = if rate_limited {
-        "YouTube rate limited. Please wait a few minutes before trying again."
+        BackendError::from_message("YouTube rate limited. Please wait a few minutes before trying again.")
     } else if let Some(ref err) = specific_error {
         // Use the specific error we detected
-        return Err(err.clone());
+        return Err(err.to_wire_string());
     } else {
-        "No transcript available. This video has no subtitles, auto-generated captions, or meaningful description to summarize."
+        BackendError::from_message(
+            "No transcript available. This video has no subtitles, auto-generated captions, or meaningful description to summarize."
+        )
     };
     
-    add_log_internal("error", error_msg, None, Some(&url)).ok();
+    add_log_internal("error", error_msg.message(), None, Some(&url)).ok();
     
-    Err(error_msg.to_string())
+    Err(error_msg.to_wire_string())
 }
 
 /// Check if video description contains relevant content (lyrics, transcript, etc.)
@@ -582,7 +584,7 @@ pub async fn get_video_info(
     cookie_file_path: Option<String>,
     proxy_url: Option<String>,
 ) -> Result<VideoInfoResponse, String> {
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let mut args = vec![
         "--dump-json".to_string(),
@@ -690,7 +692,7 @@ pub async fn get_playlist_entries(
     cookie_file_path: Option<String>,
     proxy_url: Option<String>,
 ) -> Result<Vec<PlaylistVideoEntry>, String> {
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let mut args = vec![
         "--flat-playlist".to_string(),
@@ -743,7 +745,7 @@ pub async fn get_playlist_entries(
             let (mut rx, _child) = sidecar
                 .args(&args_ref)
                 .spawn()
-                .map_err(|e| format!("Failed to start yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
             
             let mut output = String::new();
             
@@ -754,11 +756,11 @@ pub async fn get_playlist_entries(
                     }
                     CommandEvent::Stderr(_) => {}
                     CommandEvent::Error(err) => {
-                        return Err(format!("Process error: {}", err));
+                        return Err(BackendError::from_message(format!("Process error: {}", err)).to_wire_string());
                     }
                     CommandEvent::Terminated(status) => {
                         if status.code != Some(0) && output.is_empty() {
-                            return Err("Failed to fetch playlist info".to_string());
+                            return Err(BackendError::from_message("Failed to fetch playlist info").to_wire_string());
                         }
                     }
                     _ => {}
@@ -774,7 +776,7 @@ pub async fn get_playlist_entries(
                 .stderr(Stdio::piped());
             cmd.hide_window();
             let result = cmd.output().await
-                .map_err(|e| format!("Failed to run yt-dlp: {}", e))?;
+                .map_err(|e| BackendError::from_message(format!("Failed to run yt-dlp: {}", e)).to_wire_string())?;
             
             String::from_utf8_lossy(&result.stdout).to_string()
         }
@@ -835,7 +837,7 @@ pub async fn get_playlist_entries(
     }
     
     if entries.is_empty() {
-        return Err("No videos found in playlist".to_string());
+        return Err(BackendError::from_message("No videos found in playlist").to_wire_string());
     }
     
     Ok(entries)
@@ -851,7 +853,7 @@ pub async fn get_available_subtitles(
     cookie_file_path: Option<String>,
     proxy_url: Option<String>,
 ) -> Result<Vec<SubtitleInfo>, String> {
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let mut args = vec![
         "--list-subs".to_string(),
