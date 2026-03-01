@@ -5,7 +5,7 @@ use tauri_plugin_shell::ShellExt;
 use tokio::process::Command;
 
 use crate::types::DependencySource;
-use crate::types::{ChannelInfo, FollowedChannel, ChannelVideo, PlaylistVideoEntry};
+use crate::types::{BackendError, ChannelInfo, FollowedChannel, ChannelVideo, PlaylistVideoEntry};
 use crate::services::{
     build_cookie_args,
     get_deno_path,
@@ -223,7 +223,7 @@ async fn fetch_channel_videos_once(
 
         String::from_utf8_lossy(&output_result.stdout).to_string()
     } else {
-        return Err(system_ytdlp_not_found_message());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_NOT_FOUND, system_ytdlp_not_found_message()).to_wire_string());
     };
 
     let fetched_count = output.lines().filter(|line| !line.trim().is_empty()).count() as u32;

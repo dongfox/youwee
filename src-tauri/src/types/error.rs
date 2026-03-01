@@ -28,7 +28,11 @@ pub mod code {
     pub const IO_OPERATION_FAILED: &str = "IO_OPERATION_FAILED";
     pub const DB_OPERATION_FAILED: &str = "DB_OPERATION_FAILED";
     pub const YTDLP_NOT_FOUND: &str = "YTDLP_NOT_FOUND";
+    pub const YTDLP_SYSTEM_NOT_FOUND: &str = "YTDLP_SYSTEM_NOT_FOUND";
+    pub const YTDLP_APP_NOT_FOUND: &str = "YTDLP_APP_NOT_FOUND";
+    pub const YTDLP_SYSTEM_MANAGED: &str = "YTDLP_SYSTEM_MANAGED";
     pub const FFMPEG_NOT_FOUND: &str = "FFMPEG_NOT_FOUND";
+    pub const FFMPEG_SYSTEM_MANAGED: &str = "FFMPEG_SYSTEM_MANAGED";
     pub const AI_API_ERROR: &str = "AI_API_ERROR";
     pub const AI_NO_API_KEY: &str = "AI_NO_API_KEY";
     pub const AI_NO_TRANSCRIPT: &str = "AI_NO_TRANSCRIPT";
@@ -171,10 +175,14 @@ pub fn infer_error_code(message: &str) -> &'static str {
     if m.contains("members-only") || m.contains("member-only") || m.contains("join this channel") {
         return code::YT_MEMBERS_ONLY;
     }
-    if m.contains("sign in") || m.contains("login required") || m.contains("cookies") && m.contains("required") {
+    if m.contains("sign in")
+        || m.contains("login required")
+        || m.contains("cookies") && m.contains("required")
+    {
         return code::YT_SIGNIN_REQUIRED;
     }
-    if m.contains("not available in your country") || m.contains("geo") && m.contains("restricted") {
+    if m.contains("not available in your country") || m.contains("geo") && m.contains("restricted")
+    {
         return code::YT_GEO_RESTRICTED;
     }
     if m.contains("video unavailable") || m.contains("this video is unavailable") {
@@ -183,8 +191,20 @@ pub fn infer_error_code(message: &str) -> &'static str {
     if m.contains("no subtitles") || m.contains("subtitles are disabled") {
         return code::YT_NO_SUBTITLES;
     }
+    if m.contains("system yt-dlp not found") {
+        return code::YTDLP_SYSTEM_NOT_FOUND;
+    }
+    if m.contains("app-managed yt-dlp not found") {
+        return code::YTDLP_APP_NOT_FOUND;
+    }
+    if m.contains("system yt-dlp is managed externally") {
+        return code::YTDLP_SYSTEM_MANAGED;
+    }
     if m.contains("yt-dlp not found") {
         return code::YTDLP_NOT_FOUND;
+    }
+    if m.contains("system ffmpeg is managed externally") {
+        return code::FFMPEG_SYSTEM_MANAGED;
     }
     if m.contains("ffmpeg not found") || m.contains("ffprobe not found") {
         return code::FFMPEG_NOT_FOUND;
@@ -192,7 +212,8 @@ pub fn infer_error_code(message: &str) -> &'static str {
     if m.contains("timed out") || m.contains("timeout") {
         return code::NETWORK_TIMEOUT;
     }
-    if m.contains("network error") || m.contains("connection")
+    if m.contains("network error")
+        || m.contains("connection")
         || m.contains("unable to download")
         || m.contains("failed to fetch")
         || m.contains("request error")

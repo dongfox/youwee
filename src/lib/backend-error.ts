@@ -73,7 +73,11 @@ export function inferBackendErrorCode(message: string): string {
   if (m.includes('video unavailable')) return 'YT_VIDEO_UNAVAILABLE';
   if (m.includes('no subtitles')) return 'YT_NO_SUBTITLES';
   if (m.includes('no transcript available')) return 'TRANSCRIPT_NOT_AVAILABLE';
+  if (m.includes('system yt-dlp not found')) return 'YTDLP_SYSTEM_NOT_FOUND';
+  if (m.includes('app-managed yt-dlp not found')) return 'YTDLP_APP_NOT_FOUND';
+  if (m.includes('system yt-dlp is managed externally')) return 'YTDLP_SYSTEM_MANAGED';
   if (m.includes('yt-dlp not found')) return 'YTDLP_NOT_FOUND';
+  if (m.includes('system ffmpeg is managed externally')) return 'FFMPEG_SYSTEM_MANAGED';
   if (m.includes('ffmpeg not found') || m.includes('ffprobe not found')) return 'FFMPEG_NOT_FOUND';
   if (m.includes('timed out') || m.includes('timeout')) return 'NETWORK_TIMEOUT';
   if (

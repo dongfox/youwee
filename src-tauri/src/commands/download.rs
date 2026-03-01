@@ -383,7 +383,7 @@ pub async fn download_video(
 
     let ytdlp_source = get_ytdlp_source(&app).await;
     if ytdlp_source == DependencySource::System {
-        return Err(system_ytdlp_not_found_message());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_NOT_FOUND, system_ytdlp_not_found_message()).to_wire_string());
     }
     
     // Fallback to sidecar
@@ -693,7 +693,7 @@ pub async fn download_video(
         }
         Err(_) => {
             if ytdlp_source == DependencySource::App {
-                return Err("App-managed yt-dlp not found. Please install it from Settings > Dependencies.".to_string());
+                return Err(BackendError::new(crate::types::code::YTDLP_APP_NOT_FOUND, "App-managed yt-dlp not found. Please install it from Settings > Dependencies.").with_retryable(false).to_wire_string());
             }
 
             // Fallback to system yt-dlp

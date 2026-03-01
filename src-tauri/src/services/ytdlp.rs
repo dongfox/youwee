@@ -364,7 +364,7 @@ pub async fn run_ytdlp_with_stderr(app: &AppHandle, args: &[&str]) -> Result<Ytd
     }
     
     if source == DependencySource::System {
-        return Err(system_ytdlp_not_found_message());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_NOT_FOUND, system_ytdlp_not_found_message()).to_wire_string());
     }
 
     // Fallback to sidecar
@@ -528,7 +528,7 @@ pub async fn run_ytdlp_json(app: &AppHandle, args: &[&str]) -> Result<String, St
     }
     
     if source == DependencySource::System {
-        return Err(system_ytdlp_not_found_message());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_NOT_FOUND, system_ytdlp_not_found_message()).to_wire_string());
     }
 
     // Fallback to sidecar
@@ -626,7 +626,7 @@ pub async fn get_ytdlp_version_internal(app: &AppHandle) -> Result<YtdlpVersionI
     }
     
     if source == DependencySource::System {
-        return Err(system_ytdlp_not_found_message());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_NOT_FOUND, system_ytdlp_not_found_message()).to_wire_string());
     }
 
     // Fallback to sidecar
@@ -656,7 +656,7 @@ pub async fn get_ytdlp_version_internal(app: &AppHandle) -> Result<YtdlpVersionI
         }
         Err(_) => {
             if source != DependencySource::Auto {
-                return Err("App-managed yt-dlp not found. Please install it from Settings > Dependencies.".to_string());
+                return Err(BackendError::new(crate::types::code::YTDLP_APP_NOT_FOUND, "App-managed yt-dlp not found. Please install it from Settings > Dependencies.").with_retryable(false).to_wire_string());
             }
 
             let mut cmd = Command::new("yt-dlp");

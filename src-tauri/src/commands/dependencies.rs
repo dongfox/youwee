@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::Command;
 use tokio::io::AsyncWriteExt;
 use futures_util::StreamExt;
-use crate::types::{DependencySource, YtdlpVersionInfo, FfmpegStatus, DenoStatus, YtdlpChannel, YtdlpAllVersions, YtdlpChannelUpdateInfo};
+use crate::types::{BackendError, DependencySource, YtdlpVersionInfo, FfmpegStatus, DenoStatus, YtdlpChannel, YtdlpAllVersions, YtdlpChannelUpdateInfo};
 use crate::services::{
     get_ytdlp_version_internal, get_ytdlp_download_info, verify_sha256,
     check_ffmpeg_internal, get_ffmpeg_download_info, parse_ffmpeg_version,
@@ -90,7 +90,7 @@ pub async fn check_ytdlp_update() -> Result<String, String> {
 #[tauri::command]
 pub async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
     if get_ytdlp_source(&app).await == DependencySource::System {
-        return Err(system_ytdlp_upgrade_message());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_MANAGED, system_ytdlp_upgrade_message()).with_retryable(false).to_wire_string());
     }
 
     let (download_url, filename, checksum_filename) = get_ytdlp_download_info();
@@ -321,7 +321,7 @@ pub async fn check_ytdlp_channel_update(app: AppHandle, channel: String) -> Resu
 #[tauri::command]
 pub async fn download_ytdlp_channel(app: AppHandle, channel: String) -> Result<String, String> {
     if get_ytdlp_source(&app).await == DependencySource::System {
-        return Err("System yt-dlp is managed externally. Switch source to App managed to install channel binaries.".to_string());
+        return Err(BackendError::new(crate::types::code::YTDLP_SYSTEM_MANAGED, "System yt-dlp is managed externally. Switch source to App managed to install channel binaries.").with_retryable(false).to_wire_string());
     }
 
     let channel_enum = YtdlpChannel::from_str(&channel);
@@ -461,7 +461,7 @@ pub async fn check_ffmpeg_update(app: AppHandle) -> Result<FfmpegUpdateInfo, Str
 #[tauri::command]
 pub async fn download_ffmpeg(app: AppHandle) -> Result<String, String> {
     if get_ffmpeg_source(&app).await == DependencySource::System {
-        return Err(system_ffmpeg_upgrade_message());
+        return Err(BackendError::new(crate::types::code::FFMPEG_SYSTEM_MANAGED, system_ffmpeg_upgrade_message()).with_retryable(false).to_wire_string());
     }
 
     let info = get_ffmpeg_download_info();
