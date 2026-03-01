@@ -75,6 +75,11 @@
 
 ### 下载适合您平台的版本
 
+> ⚠️ **注意**: 该应用尚未使用 Apple 开发者证书签名。如果 macOS 阻止应用运行，请执行：
+> ```bash
+> xattr -cr /Applications/Youwee.app
+> ```
+
 | 平台 | 下载 |
 |------|------|
 | **Windows** (x64) | [下载 .msi](https://github.com/vanloctech/youwee/releases/latest/download/Youwee-Windows.msi) · [下载 .exe](https://github.com/vanloctech/youwee/releases/latest/download/Youwee-Windows-Setup.exe) |
@@ -95,11 +100,6 @@
 - 支持站点悬浮按钮可选择 `Video/Audio` 与清晰度
 - 弹窗可用于所有有效 HTTP/HTTPS 标签页
 - 说明文档：[docs/browser-extension.zh-CN.md](browser-extension.zh-CN.md)
-
-> ⚠️ **注意**: 该应用尚未使用 Apple 开发者证书签名。如果 macOS 阻止应用运行，请执行：
-> ```bash
-> xattr -cr /Applications/Youwee.app
-> ```
 
 ### 从源码构建
 

@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.11.1] - 2026-03-01
+
+### Added
+- **French, Portuguese, and Russian language support** - Full localization for all UI screens, settings, error messages, and metadata labels in Français, Português, and Русский
+- **Backend error localization** - Backend error messages (download failures, network errors, etc.) are now translated to the user's selected language instead of always showing English
+
+### Changed
+- **Refactored transcript fallback chain** - Unified transcript fallback logic across AI summary and processing tasks for more consistent behavior
+
+### Fixed
+- **Transcript fallback for Douyin and TikTok** - Improved transcript extraction for Douyin and TikTok videos that previously failed silently
+- **Transcript errors and short captions** - Transcript errors are now preserved for diagnostics instead of being silently swallowed; short captions are accepted as valid transcripts instead of being rejected
+- **TikTok default settings** - Aligned TikTok default download settings to match platform conventions
+
 ## [0.11.0] - 2026-02-20
 
 ### Added

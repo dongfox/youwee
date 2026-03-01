@@ -75,6 +75,11 @@
 
 ### Tải về cho nền tảng của bạn
 
+> ⚠️ **Lưu ý**: Ứng dụng chưa được ký bằng chứng chỉ Apple Developer. Nếu macOS chặn ứng dụng, hãy chạy:
+> ```bash
+> xattr -cr /Applications/Youwee.app
+> ```
+
 | Nền tảng | Tải về |
 |----------|--------|
 | **Windows** (x64) | [Tải .msi](https://github.com/vanloctech/youwee/releases/latest/download/Youwee-Windows.msi) · [Tải .exe](https://github.com/vanloctech/youwee/releases/latest/download/Youwee-Windows-Setup.exe) |
@@ -95,11 +100,6 @@
 - Nút nổi hỗ trợ chọn `Video/Audio` + chất lượng trên các trang được hỗ trợ
 - Popup hoạt động với mọi tab HTTP/HTTPS hợp lệ
 - Hướng dẫn: [docs/browser-extension.vi.md](browser-extension.vi.md)
-
-> ⚠️ **Lưu ý**: Ứng dụng chưa được ký bằng chứng chỉ Apple Developer. Nếu macOS chặn ứng dụng, hãy chạy:
-> ```bash
-> xattr -cr /Applications/Youwee.app
-> ```
 
 ### Xây dựng từ mã nguồn
 

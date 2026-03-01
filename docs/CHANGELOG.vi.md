@@ -13,6 +13,20 @@ và dự án tuân theo [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Sửa lỗi
 
+## [0.11.1] - 2026-03-01
+
+### Thêm mới
+- **Hỗ trợ tiếng Pháp, Bồ Đào Nha và Nga** - Bản địa hóa đầy đủ Français, Português và Русский cho toàn bộ giao diện, cài đặt, thông báo lỗi và nhãn metadata
+- **Bản địa hóa thông báo lỗi backend** - Các thông báo lỗi từ backend (lỗi tải, lỗi mạng, v.v.) giờ được dịch theo ngôn ngữ người dùng đã chọn thay vì luôn hiển thị tiếng Anh
+
+### Thay đổi
+- **Tái cấu trúc chuỗi fallback transcript** - Thống nhất logic fallback transcript giữa AI summary và processing để hành vi nhất quán hơn
+
+### Sửa lỗi
+- **Fallback transcript cho Douyin và TikTok** - Cải thiện trích xuất transcript cho video Douyin và TikTok trước đây bị thất bại im lặng
+- **Lỗi transcript và caption ngắn** - Lỗi transcript giờ được giữ lại để chẩn đoán thay vì bị nuốt im lặng; caption ngắn được chấp nhận là transcript hợp lệ thay vì bị từ chối
+- **Cài đặt mặc định TikTok** - Điều chỉnh cài đặt tải mặc định của TikTok cho phù hợp với quy ước nền tảng
+
 ## [0.11.0] - 2026-02-20
 
 ### Thêm mới
