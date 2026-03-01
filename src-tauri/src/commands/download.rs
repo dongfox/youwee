@@ -35,6 +35,61 @@ pub static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 const RECENT_OUTPUT_LIMIT: usize = 30;
 
+/// Decode raw bytes from a child process into a Rust String.
+///
+/// On Windows with a non-UTF-8 locale (e.g. Chinese → GBK), yt-dlp outputs
+/// file paths in the system ANSI code page.  Tokio's `BufReader::lines()`
+/// expects UTF-8 and returns `Err` on such bytes, which silently stops the
+/// reading loop and loses the filepath — causing history records to never be
+/// created.  This helper decodes via the Win32 `MultiByteToWideChar` API so
+/// the full filepath (including CJK characters) is preserved.
+#[cfg(windows)]
+fn decode_process_output(bytes: &[u8]) -> String {
+    // Fast path: already valid UTF-8
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    extern "system" {
+        fn MultiByteToWideChar(
+            code_page: u32,
+            flags: u32,
+            multi_byte_str: *const u8,
+            multi_byte: i32,
+            wide_char_str: *mut u16,
+            wide_char: i32,
+        ) -> i32;
+    }
+
+    const CP_ACP: u32 = 0; // System default Windows ANSI code page
+
+    unsafe {
+        let len = MultiByteToWideChar(
+            CP_ACP, 0,
+            bytes.as_ptr(), bytes.len() as i32,
+            std::ptr::null_mut(), 0,
+        );
+        if len <= 0 {
+            return String::from_utf8_lossy(bytes).into_owned();
+        }
+        let mut wide = vec![0u16; len as usize];
+        MultiByteToWideChar(
+            CP_ACP, 0,
+            bytes.as_ptr(), bytes.len() as i32,
+            wide.as_mut_ptr(), len,
+        );
+        OsString::from_wide(&wide).to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(not(windows))]
+fn decode_process_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// Kill all yt-dlp and ffmpeg processes
 fn kill_all_download_processes() {
     #[cfg(unix)]
@@ -162,7 +217,14 @@ pub async fn download_video(
         sanitize_output_path(&output_path).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     let format_string = build_format_string(&quality, &format, &video_codec);
     let output_template = format!("{}/%(title)s.%(ext)s", sanitized_path);
-    
+
+    // Use a temp file to capture the final filepath from yt-dlp.
+    // On Windows with non-UTF-8 locales (e.g. Chinese/GBK), stdout is encoded
+    // in the system ANSI code page which cannot represent all Unicode characters
+    // (such as ⧸ U+29F8 used by yt-dlp to replace / in filenames).
+    // --print-to-file always writes UTF-8, so we get the exact filepath.
+    let filepath_tmp = std::env::temp_dir().join(format!("youwee-fp-{}.txt", id));
+
     let mut args = vec![
         "--newline".to_string(),
         "--progress".to_string(),
@@ -171,8 +233,9 @@ pub async fn download_video(
         format_string,
         "-o".to_string(),
         output_template,
-        "--print".to_string(),
+        "--print-to-file".to_string(),
         "after_move:filepath".to_string(),
+        filepath_tmp.to_string_lossy().to_string(),
         "--no-keep-video".to_string(),
         "--no-keep-fragments".to_string(),
         "--retries".to_string(),
@@ -378,7 +441,7 @@ pub async fn download_video(
         let process = cmd.spawn()
             .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
         
-        return handle_tokio_download(app, id, process, quality, format, url, should_log_stderr, title, thumbnail, source, download_sections).await;
+        return handle_tokio_download(app, id, process, quality, format, url, should_log_stderr, title, thumbnail, source, download_sections, filepath_tmp.clone()).await;
     }
 
     let ytdlp_source = get_ytdlp_source(&app).await;
@@ -427,7 +490,7 @@ pub async fn download_video(
                 
                 match event {
                     CommandEvent::Stdout(line_bytes) => {
-                        let line = String::from_utf8_lossy(&line_bytes);
+                        let line = decode_process_output(&line_bytes);
                         push_recent_output(&mut recent_output, &line);
                         
                         // Parse playlist item info
@@ -456,17 +519,19 @@ pub async fn download_video(
                         
                         // Capture final filepath
                         let trimmed = line.trim();
-                        if !trimmed.is_empty() 
-                            && !trimmed.starts_with('[') 
+                        if !trimmed.is_empty()
+                            && !trimmed.starts_with('[')
                             && !trimmed.starts_with("Deleting")
                             && !trimmed.starts_with("WARNING")
                             && !trimmed.starts_with("ERROR")
-                            && (trimmed.ends_with(".mp3") 
-                                || trimmed.ends_with(".m4a") 
+                            && (trimmed.ends_with(".mp3")
+                                || trimmed.ends_with(".m4a")
                                 || trimmed.ends_with(".opus")
                                 || trimmed.ends_with(".mp4")
                                 || trimmed.ends_with(".mkv")
-                                || trimmed.ends_with(".webm"))
+                                || trimmed.ends_with(".webm")
+                                || trimmed.ends_with(".flac")
+                                || trimmed.ends_with(".wav"))
                         {
                             final_filepath = Some(trimmed.to_string());
                         }
@@ -522,7 +587,8 @@ pub async fn download_video(
                         }
                     }
                     CommandEvent::Stderr(bytes) => {
-                        let stderr_line = String::from_utf8_lossy(&bytes).trim().to_string();
+                        let stderr_line = decode_process_output(&bytes);
+                        let stderr_line = stderr_line.trim().to_string();
                         push_recent_output(&mut recent_output, &stderr_line);
                         
                         if let Some((percent, speed, eta, pi, pc, downloaded_size, elapsed_time)) = parse_progress(&stderr_line) {
@@ -564,7 +630,16 @@ pub async fn download_video(
                             add_log_internal("info", "Download cancelled by user", None, Some(&url)).ok();
                             return Err(BackendError::from_message("Download cancelled").to_wire_string());
                         }
-                        
+
+                        // Primary filepath source: read from --print-to-file temp file (UTF-8)
+                        if let Ok(contents) = std::fs::read_to_string(&filepath_tmp) {
+                            let path = contents.trim().to_string();
+                            if !path.is_empty() {
+                                final_filepath = Some(path);
+                            }
+                        }
+                        std::fs::remove_file(&filepath_tmp).ok();
+
                         if status.code == Some(0) {
                             let actual_filesize = final_filepath.as_ref()
                                 .and_then(|fp| std::fs::metadata(fp).ok())
@@ -706,7 +781,7 @@ pub async fn download_video(
             let process = cmd.spawn()
                 .map_err(|e| BackendError::from_message(format!("Failed to start yt-dlp: {}", e)).to_wire_string())?;
             
-            handle_tokio_download(app, id, process, quality, format, url, should_log_stderr, title, thumbnail, source, download_sections).await
+            handle_tokio_download(app, id, process, quality, format, url, should_log_stderr, title, thumbnail, source, download_sections, filepath_tmp).await
         }
     }
 }
@@ -723,13 +798,14 @@ async fn handle_tokio_download(
     thumbnail: Option<String>,
     source: Option<String>,
     download_sections: Option<String>,
+    filepath_tmp: std::path::PathBuf,
 ) -> Result<(), String> {
     let stdout = process
         .stdout
         .take()
         .ok_or_else(|| BackendError::from_message("Failed to get stdout").to_wire_string())?;
     let stderr = process.stderr.take();
-    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stdout_reader = BufReader::new(stdout);
     
     // Only use frontend title if it's not a URL (placeholder)
     let mut current_title: Option<String> = title.filter(|t| !t.starts_with("http"));
@@ -762,8 +838,20 @@ async fn handle_tokio_download(
     let stderr_fp_clone = stderr_filepath.clone();
     let stderr_task = if let Some(stderr_handle) = stderr {
         Some(tokio::spawn(async move {
-            let mut stderr_reader = BufReader::new(stderr_handle).lines();
-            while let Ok(Some(line)) = stderr_reader.next_line().await {
+            let mut stderr_reader = BufReader::new(stderr_handle);
+            let mut line_buf = Vec::new();
+            loop {
+                line_buf.clear();
+                match stderr_reader.read_until(b'\n', &mut line_buf).await {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+                while line_buf.last().map_or(false, |&b| b == b'\n' || b == b'\r') {
+                    line_buf.pop();
+                }
+                let line = decode_process_output(&line_buf);
+
                 if CANCEL_FLAG.load(Ordering::SeqCst) {
                     break;
                 }
@@ -774,10 +862,24 @@ async fn handle_tokio_download(
                 let t = line.trim();
                 if !t.is_empty() && !t.starts_with('[')
                     && (t.ends_with(".mp4") || t.ends_with(".mkv") || t.ends_with(".mp3")
-                        || t.ends_with(".m4a") || t.ends_with(".opus") || t.ends_with(".webm"))
+                        || t.ends_with(".m4a") || t.ends_with(".opus") || t.ends_with(".webm")
+                        || t.ends_with(".flac") || t.ends_with(".wav"))
                 {
                     if let Ok(mut guard) = stderr_fp_clone.lock() {
                         *guard = Some(t.to_string());
+                    }
+                }
+
+                // Capture audio filepath from [ExtractAudio] Destination lines in stderr
+                // e.g. "[ExtractAudio] Destination: C:\Users\...\song.mp3"
+                if line.contains("[ExtractAudio]") && line.contains("Destination:") {
+                    if let Some(pos) = line.find("Destination:") {
+                        let path = line[pos + "Destination:".len()..].trim();
+                        if !path.is_empty() {
+                            if let Ok(mut guard) = stderr_fp_clone.lock() {
+                                *guard = Some(path.to_string());
+                            }
+                        }
                     }
                 }
 
@@ -814,8 +916,21 @@ async fn handle_tokio_download(
         None
     };
     
-    // Read stdout
-    while let Ok(Some(line)) = stdout_reader.next_line().await {
+    // Read stdout — use raw byte reading + decode_process_output to handle
+    // non-UTF-8 encodings (e.g. GBK on Chinese Windows).
+    let mut stdout_line_buf = Vec::new();
+    loop {
+        stdout_line_buf.clear();
+        match stdout_reader.read_until(b'\n', &mut stdout_line_buf).await {
+            Ok(0) => break, // EOF
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        while stdout_line_buf.last().map_or(false, |&b| b == b'\n' || b == b'\r') {
+            stdout_line_buf.pop();
+        }
+        let line = decode_process_output(&stdout_line_buf);
+
         if CANCEL_FLAG.load(Ordering::SeqCst) {
             process.kill().await.ok();
             kill_all_download_processes();
@@ -865,13 +980,25 @@ async fn handle_tokio_download(
         
         // Capture final filepath
         let trimmed = line.trim();
-        if !trimmed.is_empty() 
-            && !trimmed.starts_with('[') 
-            && (trimmed.ends_with(".mp3") || trimmed.ends_with(".m4a") 
+        if !trimmed.is_empty()
+            && !trimmed.starts_with('[')
+            && (trimmed.ends_with(".mp3") || trimmed.ends_with(".m4a")
                 || trimmed.ends_with(".opus") || trimmed.ends_with(".mp4")
-                || trimmed.ends_with(".mkv") || trimmed.ends_with(".webm"))
+                || trimmed.ends_with(".mkv") || trimmed.ends_with(".webm")
+                || trimmed.ends_with(".flac") || trimmed.ends_with(".wav"))
         {
             final_filepath = Some(trimmed.to_string());
+        }
+
+        // Capture audio filepath from [ExtractAudio] Destination lines
+        // e.g. "[ExtractAudio] Destination: C:\Users\...\song.mp3"
+        if line.contains("[ExtractAudio]") && line.contains("Destination:") {
+            if let Some(pos) = line.find("Destination:") {
+                let path = line[pos + "Destination:".len()..].trim();
+                if !path.is_empty() {
+                    final_filepath = Some(path.to_string());
+                }
+            }
         }
         
         // Parse filesize
@@ -899,13 +1026,24 @@ async fn handle_tokio_download(
         }
     }
     
-    // Wait for stderr task to finish
+    // Wait for stderr task to finish reading all lines.
     if let Some(task) = stderr_task {
-        task.abort(); // Stop reading stderr when stdout is done
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
     }
 
-    // Fallback: if stdout didn't yield a filepath (happens on some Windows yt-dlp builds
-    // where --print after_move:filepath goes to stderr instead), use what stderr captured.
+    // Primary filepath source: read from the --print-to-file temp file (UTF-8).
+    // This is reliable on all platforms, especially Windows with non-UTF-8 locales
+    // where stdout encoding (GBK) corrupts Unicode characters in file paths.
+    if let Ok(contents) = std::fs::read_to_string(&filepath_tmp) {
+        let path = contents.trim().to_string();
+        if !path.is_empty() {
+            final_filepath = Some(path);
+        }
+    }
+    // Clean up the temp file
+    std::fs::remove_file(&filepath_tmp).ok();
+
+    // Fallback: if the temp file didn't yield a filepath, try stdout/stderr captures
     if final_filepath.is_none() {
         if let Ok(guard) = stderr_filepath.lock() {
             if guard.is_some() {
