@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { localizeProgressError, localizeUnknownError } from '@/lib/backend-error';
 import type {
   ChannelVideo,
   DownloadProgress,
@@ -612,7 +613,7 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         // Discard stale error
         if (requestId !== fetchRequestIdRef.current) return;
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = localizeUnknownError(error);
         setBrowseError(msg);
       } finally {
         // Only update loading state if this is still the current request
@@ -790,7 +791,7 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
             source: detectPlatform(browseUrl) || 'youtube',
           });
         } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
+          const msg = localizeUnknownError(error);
           console.error(`Failed to download ${video.title}:`, error);
           setVideoStates((prev) => {
             const next = new Map(prev);
@@ -886,7 +887,12 @@ export function ChannelsProvider({ children }: { children: ReactNode }) {
             status: 'error',
             progress: 0,
             speed: '',
-            error: progress.error_message || 'Download failed',
+            error:
+              localizeProgressError(
+                progress.error_code,
+                progress.error_message,
+                progress.error_params,
+              ) || 'Download failed',
           });
           return next;
         });

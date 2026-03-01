@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SubtitleWaveformTimeline } from '@/components/subtitles/SubtitleWaveformTimeline';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import { formatTimeDisplay } from '@/lib/subtitle-parser';
 import type { VideoMetadata } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -87,7 +88,7 @@ export function SubtitleVideoPreview() {
         }
       } catch (err) {
         console.error('Failed to load video for subtitles:', err);
-        setVideoError(String(err));
+        setVideoError(localizeUnknownError(err));
         setVideoSrc(null);
         setAudioSrc(null);
       } finally {

@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { localizeProgressError, localizeUnknownError } from '@/lib/backend-error';
 import { useDownload } from './DownloadContext';
 
 const STORAGE_KEY = 'youwee_metadata_settings';
@@ -47,6 +48,8 @@ interface MetadataProgress {
   status: string;
   title?: string;
   error_message?: string;
+  error_code?: string;
+  error_params?: Record<string, string | number | boolean>;
 }
 
 interface MetadataContextType {
@@ -149,7 +152,11 @@ export function MetadataProvider({ children }: { children: ReactNode }) {
                     : progress.status === 'error'
                       ? 'error'
                       : 'fetching',
-                error: progress.error_message,
+                error: localizeProgressError(
+                  progress.error_code,
+                  progress.error_message,
+                  progress.error_params,
+                ),
               }
             : item,
         ),
@@ -237,7 +244,7 @@ export function MetadataProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         setItems((items) =>
           items.map((i) =>
-            i.id === item.id ? { ...i, status: 'error', error: String(error) } : i,
+            i.id === item.id ? { ...i, status: 'error', error: localizeUnknownError(error) } : i,
           ),
         );
       }

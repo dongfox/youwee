@@ -13,12 +13,16 @@ import {
   useState,
 } from 'react';
 import {
+  extractBackendError,
+  localizeBackendError,
+  localizeProgressError,
+} from '@/lib/backend-error';
+import {
   AUTO_RETRY_LIMITS,
   clampAutoRetryDelaySeconds,
   clampAutoRetryMaxAttempts,
   isNonRetryableError,
   isRetryableError,
-  normalizeErrorMessage,
   waitWithCancellation,
 } from '@/lib/download-retry';
 import type {
@@ -437,10 +441,11 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
       // Detect cookie error on Windows (lock error or DPAPI/App-Bound Encryption)
       const cookieErrorPattern =
         /could not copy.*cookie|permission denied.*cookies|cookie.*database|failed to.*cookie|failed to decrypt.*dpapi|app.bound.encryption/i;
+      const cookieErrorCodes = new Set(['YT_COOKIE_DB_LOCKED', 'YT_FRESH_COOKIES_REQUIRED']);
       if (
         progress.status === 'error' &&
-        progress.error_message &&
-        cookieErrorPattern.test(progress.error_message)
+        ((progress.error_code && cookieErrorCodes.has(progress.error_code)) ||
+          (progress.error_message && cookieErrorPattern.test(progress.error_message)))
       ) {
         setCookieError({ show: true, itemId: progress.id });
       }
@@ -460,7 +465,11 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
                     : progress.status === 'error'
                       ? 'error'
                       : 'downloading',
-                error: progress.error_message,
+                error: localizeProgressError(
+                  progress.error_code,
+                  progress.error_message,
+                  progress.error_params,
+                ),
                 retryState: undefined,
                 playlistIndex: progress.playlist_index,
                 playlistTotal: progress.playlist_count,
@@ -937,13 +946,14 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
           );
           return;
         } catch (error) {
-          const errorMessage = normalizeErrorMessage(error);
+          const parsedError = extractBackendError(error);
+          const errorMessage = localizeBackendError(parsedError);
           const canRetry =
             isDownloadingRef.current &&
             autoRetryEnabled &&
             retryIndex < maxRetries &&
-            !isNonRetryableError(errorMessage) &&
-            isRetryableError(errorMessage);
+            !isNonRetryableError(parsedError.message, parsedError.code) &&
+            isRetryableError(parsedError.message, parsedError.code, parsedError.retryable);
 
           if (!canRetry) {
             setItems((items) =>

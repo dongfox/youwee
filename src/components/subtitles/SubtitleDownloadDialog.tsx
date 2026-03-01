@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDownload } from '@/contexts/DownloadContext';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import { cn } from '@/lib/utils';
 
 interface SubtitleDownloadInfo {
@@ -51,7 +52,7 @@ export function SubtitleDownloadDialog({ open, onClose }: SubtitleDownloadDialog
         setError(t('download.noSubtitles'));
       }
     } catch (err) {
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsFetching(false);
     }
@@ -83,7 +84,7 @@ export function SubtitleDownloadDialog({ open, onClose }: SubtitleDownloadDialog
       onClose();
     } catch (err) {
       // If download_subtitle_content doesn't exist yet, show error
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsDownloading(false);
     }

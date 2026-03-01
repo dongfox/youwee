@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { localizeUnknownError } from '@/lib/backend-error';
 import type {
   AIConfig,
   AIProvider as AIProviderType,
@@ -60,6 +61,10 @@ function buildProxyUrl(settings: ProxySettings): string | undefined {
       : '';
 
   return `${protocol}://${auth}${settings.host}:${settings.port}`;
+}
+
+function extractErrorMessage(error: unknown): string {
+  return localizeUnknownError(error);
 }
 
 // Task status for background summary generation
@@ -201,7 +206,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       const message = await invoke<string>('test_ai_connection', { config });
       setTestResult({ success: true, message });
     } catch (error) {
-      setTestResult({ success: false, message: String(error) });
+      setTestResult({ success: false, message: extractErrorMessage(error) });
     } finally {
       setIsTesting(false);
     }
@@ -230,6 +235,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
       const languages = config.transcript_languages || ['en'];
       const cookieSettings = loadCookieSettings();
       const proxySettings = loadProxySettings();
+      let transcriptError: string | null = null;
 
       // Try YouTube captions first
       try {
@@ -243,14 +249,18 @@ export function AIProvider({ children }: { children: ReactNode }) {
           proxyUrl: buildProxyUrl(proxySettings) || null,
         });
 
-        // Check if we got meaningful transcript
-        if (transcript && transcript.trim().length > 50) {
-          return transcript;
+        const normalizedTranscript = transcript?.trim();
+
+        if (normalizedTranscript) {
+          return normalizedTranscript;
         }
+
+        transcriptError = 'Transcript is empty.';
       } catch (error) {
-        // No YouTube captions available, will try Whisper fallback
+        transcriptError = extractErrorMessage(error);
+
         if (import.meta.env.DEV) {
-          console.log('[AI] YouTube transcript failed, trying Whisper fallback:', error);
+          console.log('[AI] Transcript fetch failed, trying Whisper fallback:', transcriptError);
         }
       }
 
@@ -264,19 +274,34 @@ export function AIProvider({ children }: { children: ReactNode }) {
             console.log('[AI] Using Whisper transcription for:', url);
           }
 
-          return await invoke<string>('transcribe_url_with_whisper', {
-            url,
-            responseFormat: 'text',
-            openaiApiKey: whisperKey,
-            language: languages[0] || null, // Use first preferred language as hint
-            cookieMode: cookieSettings.mode,
-            cookieBrowser: cookieSettings.browser || null,
-            cookieBrowserProfile: cookieSettings.browserProfile || null,
-            cookieFilePath: cookieSettings.filePath || null,
-            proxyUrl: buildProxyUrl(proxySettings) || null,
-            whisperEndpointUrl: config.whisper_endpoint_url || null,
-            whisperModel: config.whisper_model || null,
-          });
+          try {
+            const whisperTranscript = await invoke<string>('transcribe_url_with_whisper', {
+              url,
+              responseFormat: 'text',
+              openaiApiKey: whisperKey,
+              language: languages[0] || null, // Use first preferred language as hint
+              cookieMode: cookieSettings.mode,
+              cookieBrowser: cookieSettings.browser || null,
+              cookieBrowserProfile: cookieSettings.browserProfile || null,
+              cookieFilePath: cookieSettings.filePath || null,
+              proxyUrl: buildProxyUrl(proxySettings) || null,
+              whisperEndpointUrl: config.whisper_endpoint_url || null,
+              whisperModel: config.whisper_model || null,
+            });
+
+            const normalizedWhisperTranscript = whisperTranscript?.trim();
+            if (normalizedWhisperTranscript) {
+              return normalizedWhisperTranscript;
+            }
+
+            throw new Error('Whisper transcription is empty.');
+          } catch (error) {
+            const whisperError = extractErrorMessage(error);
+            const details = transcriptError
+              ? `Transcript fetch failed: ${transcriptError} | Whisper failed: ${whisperError}`
+              : `Whisper failed: ${whisperError}`;
+            throw new Error(details);
+          }
         } else {
           throw new Error(
             'Whisper is enabled but no API key configured. ' +
@@ -285,6 +310,10 @@ export function AIProvider({ children }: { children: ReactNode }) {
                 : 'Please add a Whisper API key in Settings.'),
           );
         }
+      }
+
+      if (transcriptError) {
+        throw new Error(transcriptError);
       }
 
       throw new Error(
@@ -350,33 +379,14 @@ export function AIProvider({ children }: { children: ReactNode }) {
         return newMap;
       });
 
-      // Get languages from current config
-      const languages = config.transcript_languages || ['en'];
-
-      // Get cookie settings
-      const cookieSettings = loadCookieSettings();
-
-      // Get proxy settings
-      const proxySettings = loadProxySettings();
-
       // Run in background (not awaited, fire-and-forget)
       (async () => {
         try {
           // Fetch transcript
           if (import.meta.env.DEV) {
-            console.log(
-              `[AI] Fetching transcript for URL: ${url}, languages: ${languages.join(', ')}`,
-            );
+            console.log(`[AI] Fetching transcript for URL with fallback chain: ${url}`);
           }
-          const transcript = await invoke<string>('get_video_transcript', {
-            url,
-            languages,
-            cookieMode: cookieSettings.mode,
-            cookieBrowser: cookieSettings.browser || null,
-            cookieBrowserProfile: cookieSettings.browserProfile || null,
-            cookieFilePath: cookieSettings.filePath || null,
-            proxyUrl: buildProxyUrl(proxySettings) || null,
-          });
+          const transcript = await fetchTranscript(url);
 
           if (import.meta.env.DEV) {
             console.log(
@@ -405,7 +415,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           // Complete
           updateTask(historyId, { status: 'completed', summary });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = extractErrorMessage(error);
           console.error(`[AI] Task failed for historyId=${historyId}:`, message);
           updateTask(historyId, { status: 'error', error: message });
         } finally {
@@ -413,7 +423,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }
       })();
     },
-    [updateTask, config.transcript_languages, config.enabled],
+    [updateTask, config.enabled, fetchTranscript],
   );
 
   const getSummaryTask = useCallback(
@@ -468,27 +478,11 @@ export function AIProvider({ children }: { children: ReactNode }) {
         return newMap;
       });
 
-      const languages = config.transcript_languages || ['en'];
-
-      // Get cookie settings
-      const cookieSettings = loadCookieSettings();
-
-      // Get proxy settings
-      const proxySettings = loadProxySettings();
-
       // Run in background
       (async () => {
         try {
           // Fetch transcript
-          const transcript = await invoke<string>('get_video_transcript', {
-            url: itemInfo.url,
-            languages,
-            cookieMode: cookieSettings.mode,
-            cookieBrowser: cookieSettings.browser || null,
-            cookieBrowserProfile: cookieSettings.browserProfile || null,
-            cookieFilePath: cookieSettings.filePath || null,
-            proxyUrl: buildProxyUrl(proxySettings) || null,
-          });
+          const transcript = await fetchTranscript(itemInfo.url);
 
           // Update to generating status
           updateTask(taskId, { status: 'generating' });
@@ -517,7 +511,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
           // Complete
           updateTask(taskId, { status: 'completed', summary });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = extractErrorMessage(error);
           console.error(`[AI] Queue task failed for taskId=${taskId}:`, message);
           updateTask(taskId, { status: 'error', error: message });
         } finally {
@@ -525,7 +519,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         }
       })();
     },
-    [updateTask, config.transcript_languages, config.enabled],
+    [updateTask, config.enabled, fetchTranscript],
   );
 
   return (

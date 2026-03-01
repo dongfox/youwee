@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+import { localizeUnknownError } from '@/lib/backend-error';
 import type { DownloadProgress, HistoryEntry, HistoryFilter } from '@/lib/types';
 
 // Re-download task state
@@ -323,7 +324,7 @@ export function HistoryProvider({ children }: { children: ReactNode }) {
             newMap.set(entry.id, {
               ...task,
               status: 'error',
-              error: error instanceof Error ? error.message : 'Download failed',
+              error: localizeUnknownError(error),
             });
           }
           return newMap;

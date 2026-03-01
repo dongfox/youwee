@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import { LANGUAGE_OPTIONS } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -337,7 +338,7 @@ export function TranslateDialog({ open, onClose }: TranslateDialogProps) {
       if (String(err).includes(TRANSLATE_CANCELLED_ERROR)) {
         return;
       }
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       if (activeRunIdRef.current === runId) {
         setIsTranslating(false);

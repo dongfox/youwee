@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+
+import { localizeUnknownError } from '@/lib/backend-error';
 import type {
   DependencySource,
   YtdlpAllVersions,
@@ -177,7 +179,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       const info = await invoke<YtdlpVersionInfo>('get_ytdlp_version');
       setYtdlpInfo(info);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsLoading(false);
     }
@@ -193,7 +195,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       setYtdlpChannelState(versions.current_channel as YtdlpChannel);
       return versions;
     } catch (err) {
-      setChannelError(err instanceof Error ? err.message : String(err));
+      setChannelError(localizeUnknownError(err));
       return null;
     } finally {
       setIsChannelLoading(false);
@@ -227,7 +229,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
         // Refresh yt-dlp version info to reflect the change
         await refreshYtdlpVersion();
       } catch (err) {
-        setChannelError(err instanceof Error ? err.message : String(err));
+        setChannelError(localizeUnknownError(err));
       }
     },
     [refreshYtdlpVersion],
@@ -244,7 +246,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       });
       setYtdlpChannelUpdateInfo(updateInfo);
     } catch (err) {
-      setChannelError(err instanceof Error ? err.message : String(err));
+      setChannelError(localizeUnknownError(err));
     } finally {
       setIsChannelCheckingUpdate(false);
     }
@@ -276,7 +278,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
         // Hide success message after 3 seconds
         setTimeout(() => setChannelDownloadSuccess(false), 3000);
       } catch (err) {
-        setChannelError(err instanceof Error ? err.message : String(err));
+        setChannelError(localizeUnknownError(err));
       } finally {
         setIsChannelDownloading(false);
       }
@@ -292,7 +294,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       const status = await invoke<FfmpegStatus>('check_ffmpeg');
       setFfmpegStatus(status);
     } catch (err) {
-      setFfmpegError(err instanceof Error ? err.message : String(err));
+      setFfmpegError(localizeUnknownError(err));
     } finally {
       setFfmpegLoading(false);
     }
@@ -326,7 +328,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       const updateInfo = await invoke<FfmpegUpdateInfo>('check_ffmpeg_update');
       setFfmpegUpdateInfo(updateInfo);
     } catch (err) {
-      setFfmpegError(err instanceof Error ? err.message : String(err));
+      setFfmpegError(localizeUnknownError(err));
     } finally {
       setFfmpegCheckingUpdate(false);
     }
@@ -358,7 +360,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       // Refresh to get full status
       await checkFfmpeg();
     } catch (err) {
-      setFfmpegError(err instanceof Error ? err.message : String(err));
+      setFfmpegError(localizeUnknownError(err));
     } finally {
       setFfmpegDownloading(false);
     }
@@ -373,7 +375,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       setDenoStatus(status);
       return status;
     } catch (err) {
-      setDenoError(err instanceof Error ? err.message : String(err));
+      setDenoError(localizeUnknownError(err));
       return null;
     } finally {
       setDenoLoading(false);
@@ -388,7 +390,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       const updateInfo = await invoke<DenoUpdateInfo>('check_deno_update');
       setDenoUpdateInfo(updateInfo);
     } catch (err) {
-      setDenoError(err instanceof Error ? err.message : String(err));
+      setDenoError(localizeUnknownError(err));
     } finally {
       setDenoCheckingUpdate(false);
     }
@@ -420,7 +422,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       // Refresh to get full status
       await checkDeno();
     } catch (err) {
-      setDenoError(err instanceof Error ? err.message : String(err));
+      setDenoError(localizeUnknownError(err));
     } finally {
       setDenoDownloading(false);
     }
@@ -498,7 +500,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
             // Hide success message after 3 seconds
             setTimeout(() => setDenoSuccess(false), 3000);
           } catch (err) {
-            setDenoError(err instanceof Error ? err.message : String(err));
+            setDenoError(localizeUnknownError(err));
           } finally {
             setDenoDownloading(false);
             // Keep isAutoDownloadingDeno true until user dismisses or success auto-closes
@@ -553,7 +555,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       const latest = await invoke<string>('check_ytdlp_update');
       setLatestVersion(latest);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsChecking(false);
     }
@@ -575,7 +577,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
       // Hide success message after 3 seconds
       setTimeout(() => setUpdateSuccess(false), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(localizeUnknownError(err));
     } finally {
       setIsUpdating(false);
     }

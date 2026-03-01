@@ -179,6 +179,8 @@ export interface DownloadProgress {
   format_ext?: string;
   // Error message when status is 'error'
   error_message?: string;
+  error_code?: string;
+  error_params?: Record<string, string | number | boolean>;
   // For live streams (no percentage available)
   downloaded_size?: string; // e.g. "2.87 MiB"
   elapsed_time?: string; // e.g. "00:00:07"

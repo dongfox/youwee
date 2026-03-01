@@ -1,7 +1,19 @@
 import { invoke } from '@tauri-apps/api/core';
-import { Check, Database, ExternalLink, Film, Monitor, Moon, Palette, Sun } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import {
+  Check,
+  ChevronDown,
+  Database,
+  ExternalLink,
+  Film,
+  Monitor,
+  Moon,
+  Palette,
+  Sun,
+} from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -17,12 +29,6 @@ import type { ThemeName } from '@/lib/themes';
 import { themes } from '@/lib/themes';
 import { cn } from '@/lib/utils';
 import { SettingsDivider, SettingsRow, SettingsSection } from '../SettingsSection';
-
-const SUPPORTED_LANGUAGES = [
-  { code: 'en', name: 'English' },
-  { code: 'vi', name: 'Tiếng Việt' },
-  { code: 'zh-CN', name: '简体中文' },
-];
 
 const isMacOS = navigator.platform.includes('Mac');
 const LANGUAGE_REQUEST_DISCUSSION_URL = 'https://github.com/vanloctech/youwee/discussions/18';
@@ -47,6 +53,8 @@ export function GeneralSection({ highlightId }: GeneralSectionProps) {
   const { theme, setTheme, mode, setMode } = useTheme();
   const { maxEntries, setMaxEntries, totalCount } = useHistory();
   const { previewSizeThreshold, setPreviewSizeThreshold } = useProcessing();
+  const [languageOpen, setLanguageOpen] = useState(false);
+  const [languageQuery, setLanguageQuery] = useState('');
 
   const [hideDockOnClose, setHideDockOnClose] = useState(() => {
     return localStorage.getItem('youwee_hide_dock_on_close') === 'true';
@@ -58,10 +66,36 @@ export function GeneralSection({ highlightId }: GeneralSectionProps) {
     invoke('set_hide_dock_on_close', { hide: checked }).catch(() => {});
   }, []);
 
+  const supportedLanguages = useMemo(() => {
+    const resources = i18n.options.resources ?? {};
+    return Object.keys(resources).map((code) => ({
+      code,
+      name: tCommon(`language.${code}`, { defaultValue: code }),
+    }));
+  }, [i18n.options.resources, tCommon]);
+
+  const currentLanguageCode = useMemo(() => {
+    const current = i18n.resolvedLanguage || i18n.language || 'en';
+    return (
+      supportedLanguages.find((lang) => current.toLowerCase().startsWith(lang.code.toLowerCase()))
+        ?.code || 'en'
+    );
+  }, [i18n.language, i18n.resolvedLanguage, supportedLanguages]);
+
+  const filteredLanguages = useMemo(() => {
+    const keyword = languageQuery.trim().toLowerCase();
+    if (!keyword) return supportedLanguages;
+    return supportedLanguages.filter((lang) => {
+      return lang.code.toLowerCase().includes(keyword) || lang.name.toLowerCase().includes(keyword);
+    });
+  }, [languageQuery, supportedLanguages]);
+
   const handleLanguageChange = (langCode: string) => {
-    i18n.changeLanguage(langCode);
+    void i18n.changeLanguage(langCode);
     // Update system tray menu language
     invoke('rebuild_tray_menu_cmd', { lang: langCode }).catch(() => {});
+    setLanguageOpen(false);
+    setLanguageQuery('');
   };
 
   return (
@@ -117,23 +151,63 @@ export function GeneralSection({ highlightId }: GeneralSectionProps) {
           description={tCommon('language.select')}
           highlight={highlightId === 'language'}
         >
-          <div className="flex w-full flex-wrap items-center gap-1 rounded-xl bg-muted/50 p-1 sm:w-auto">
-            {SUPPORTED_LANGUAGES.map((lang) => (
+          <Popover open={languageOpen} onOpenChange={setLanguageOpen}>
+            <PopoverTrigger asChild>
               <button
-                key={lang.code}
                 type="button"
-                onClick={() => handleLanguageChange(lang.code)}
                 className={cn(
-                  'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all',
-                  i18n.language?.startsWith(lang.code)
-                    ? 'bg-background text-foreground shadow-md'
-                    : 'text-muted-foreground hover:text-foreground',
+                  'h-9 w-full sm:w-[260px]',
+                  'inline-flex items-center justify-between gap-2 rounded-md border border-border bg-background px-3 text-sm',
+                  'text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground',
                 )}
               >
-                {lang.name}
+                <span className="truncate">
+                  {tCommon(`language.${currentLanguageCode}`, {
+                    defaultValue: currentLanguageCode,
+                  })}
+                </span>
+                <ChevronDown className="h-4 w-4 opacity-60" />
               </button>
-            ))}
-          </div>
+            </PopoverTrigger>
+            <PopoverContent className="w-[300px] p-2" align="start">
+              <div className="space-y-2">
+                <Input
+                  value={languageQuery}
+                  onChange={(e) => setLanguageQuery(e.target.value)}
+                  placeholder={t('search.placeholder')}
+                  className="h-9"
+                />
+                <div className="max-h-56 overflow-y-auto pr-1">
+                  {filteredLanguages.length > 0 ? (
+                    filteredLanguages.map((lang) => {
+                      const selected = lang.code === currentLanguageCode;
+                      return (
+                        <button
+                          key={lang.code}
+                          type="button"
+                          onClick={() => handleLanguageChange(lang.code)}
+                          className={cn(
+                            'w-full rounded-md px-2 py-2 text-left text-sm transition-colors',
+                            'flex items-center justify-between gap-2',
+                            selected
+                              ? 'bg-primary/10 text-primary'
+                              : 'text-foreground hover:bg-accent hover:text-accent-foreground',
+                          )}
+                        >
+                          <span className="truncate">{lang.name}</span>
+                          {selected && <Check className="h-4 w-4" />}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <p className="px-2 py-2 text-sm text-muted-foreground">
+                      {t('search.noResults')}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         </SettingsRow>
 
         <SettingsRow

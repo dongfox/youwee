@@ -2,10 +2,30 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
-use crate::types::{VideoInfo, FormatOption, VideoInfoResponse, PlaylistVideoEntry, SubtitleInfo};
+use crate::types::{BackendError, VideoInfo, FormatOption, VideoInfoResponse, PlaylistVideoEntry, SubtitleInfo};
 use crate::services::{parse_ytdlp_error, run_ytdlp_json_with_cookies, run_ytdlp_with_stderr_and_cookies, run_ytdlp_with_stderr, build_cookie_args, get_deno_path};
 use crate::utils::validate_url;
 use crate::database::add_log_internal;
+
+fn default_transcript_languages(url: &str) -> Vec<String> {
+    let lowered = url.to_lowercase();
+    if lowered.contains("douyin.com")
+        || lowered.contains("iesdouyin.com")
+        || lowered.contains("bilibili.com")
+        || lowered.contains("b23.tv")
+    {
+        return vec![
+            "zh-Hans".to_string(),
+            "zh-CN".to_string(),
+            "zh".to_string(),
+            "en".to_string(),
+        ];
+    }
+    if lowered.contains("tiktok.com") {
+        return vec!["en".to_string()];
+    }
+    vec!["en".to_string()]
+}
 
 /// Get video transcript/subtitles for AI summarization
 #[tauri::command]
@@ -23,7 +43,7 @@ pub async fn get_video_transcript(
     #[cfg(debug_assertions)]
     println!("[TRANSCRIPT] Fetching transcript for URL: {}", &url);
     
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     add_log_internal("info", &format!("Fetching transcript for AI summary"), None, Some(&url)).ok();
     
@@ -34,7 +54,7 @@ pub async fn get_video_transcript(
     if let Err(e) = std::fs::create_dir_all(&temp_dir) {
         let error_msg = format!("Failed to create temp directory: {}", e);
         add_log_internal("error", &error_msg, None, Some(&url)).ok();
-        return Err(error_msg);
+        return Err(BackendError::from_message(error_msg).to_wire_string());
     }
     
     let temp_path = temp_dir.join("transcript");
@@ -45,9 +65,7 @@ pub async fn get_video_transcript(
     let url_for_info = url.clone();
     
     // Use provided languages or default
-    let lang_list: Vec<String> = languages.unwrap_or_else(|| {
-        vec!["en".to_string()]
-    });
+    let lang_list: Vec<String> = languages.unwrap_or_else(|| default_transcript_languages(&url));
     
     #[cfg(debug_assertions)]
     println!("[TRANSCRIPT] Languages to try: {:?}", lang_list);
@@ -67,7 +85,7 @@ pub async fn get_video_transcript(
     
     // Track if we hit a rate limit error
     let mut rate_limited = false;
-    let mut specific_error: Option<String> = None;
+    let mut specific_error: Option<BackendError> = None;
     let mut subtitle_files: Vec<std::path::PathBuf> = Vec::new();
     
     for (idx, lang) in lang_list.iter().enumerate() {
@@ -277,6 +295,8 @@ pub async fn get_video_transcript(
                     
                     add_log_internal("info", "Description not relevant (promotional content only)", None, Some(&url)).ok();
                 }
+            } else {
+                add_log_internal("info", "Description fallback returned too little content", None, Some(&url)).ok();
             }
         }
         Ok(Err(e)) => {
@@ -290,20 +310,66 @@ pub async fn get_video_transcript(
             add_log_internal("stderr", "Description fetch timed out (45s)", None, Some(&url)).ok();
         }
     }
+
+    // Fallback #2: metadata extraction from dump-json (useful for Douyin/TikTok when subtitles are unavailable)
+    if !rate_limited {
+        let metadata_args = vec![
+            "--dump-json",
+            "--no-download",
+            "--no-playlist",
+            "--no-warnings",
+            "--no-cache-dir",
+            "--socket-timeout",
+            "30",
+            "--",
+            &url_for_info,
+        ];
+        let metadata_result = timeout(
+            Duration::from_secs(45),
+            run_ytdlp_json_with_cookies(
+                &app,
+                &metadata_args.iter().copied().collect::<Vec<_>>(),
+                cookie_mode.as_deref(),
+                cookie_browser.as_deref(),
+                cookie_browser_profile.as_deref(),
+                cookie_file_path.as_deref(),
+                proxy_url.as_deref(),
+            ),
+        )
+        .await;
+        match metadata_result {
+            Ok(Ok(json_output)) => {
+                if let Ok(info_json) = serde_json::from_str::<serde_json::Value>(&json_output) {
+                    if let Some(text) = build_metadata_fallback_from_info_json(&info_json) {
+                        add_log_internal("success", "Using metadata fallback content", None, Some(&url)).ok();
+                        return Ok(text);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                add_log_internal("stderr", &format!("Metadata fallback failed: {}", e), None, Some(&url)).ok();
+            }
+            Err(_) => {
+                add_log_internal("stderr", "Metadata fallback timed out (45s)", None, Some(&url)).ok();
+            }
+        }
+    }
     
     // Return specific error message if we detected one
     let error_msg = if rate_limited {
-        "YouTube rate limited. Please wait a few minutes before trying again."
+        BackendError::from_message("YouTube rate limited. Please wait a few minutes before trying again.")
     } else if let Some(ref err) = specific_error {
         // Use the specific error we detected
-        return Err(err.clone());
+        return Err(err.to_wire_string());
     } else {
-        "No transcript available. This video has no subtitles, auto-generated captions, or meaningful description to summarize."
+        BackendError::from_message(
+            "No transcript available. This video has no subtitles, auto-generated captions, or meaningful description to summarize."
+        )
     };
     
-    add_log_internal("error", error_msg, None, Some(&url)).ok();
+    add_log_internal("error", error_msg.message(), None, Some(&url)).ok();
     
-    Err(error_msg.to_string())
+    Err(error_msg.to_wire_string())
 }
 
 /// Check if video description contains relevant content (lyrics, transcript, etc.)
@@ -387,6 +453,75 @@ fn is_description_content_relevant(title: &str, description: &str) -> bool {
     text_without_links.split_whitespace().count() > 50
 }
 
+fn build_metadata_fallback_from_info_json(json: &serde_json::Value) -> Option<String> {
+    let title = json
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let description = json
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    if !title.is_empty() && !description.is_empty() && description.len() > 50 && is_description_content_relevant(title, description) {
+        return Some(format!("[Video Description - No subtitles available]\nTitle: {}\n\n{}", title, description));
+    }
+
+    let uploader = json
+        .get("uploader")
+        .and_then(|v| v.as_str())
+        .or_else(|| json.get("channel").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .trim();
+    let upload_date = json.get("upload_date").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let duration = json.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let view_count = json.get("view_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let like_count = json.get("like_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let comment_count = json.get("comment_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let repost_count = json.get("repost_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let webpage_url = json.get("webpage_url").and_then(|v| v.as_str()).unwrap_or("").trim();
+
+    let mut lines: Vec<String> = Vec::new();
+    if !title.is_empty() {
+        lines.push(format!("Title: {}", title));
+    }
+    if !uploader.is_empty() {
+        lines.push(format!("Uploader: {}", uploader));
+    }
+    if !upload_date.is_empty() {
+        lines.push(format!("Upload date: {}", upload_date));
+    }
+    if duration > 0.0 {
+        lines.push(format!("Duration: {:.0}s", duration));
+    }
+    if view_count > 0 {
+        lines.push(format!("Views: {}", view_count));
+    }
+    if like_count > 0 {
+        lines.push(format!("Likes: {}", like_count));
+    }
+    if comment_count > 0 {
+        lines.push(format!("Comments: {}", comment_count));
+    }
+    if repost_count > 0 {
+        lines.push(format!("Shares/Reposts: {}", repost_count));
+    }
+    if !webpage_url.is_empty() {
+        lines.push(format!("Source URL: {}", webpage_url));
+    }
+
+    if lines.len() < 2 {
+        return None;
+    }
+
+    Some(format!(
+        "[Video Metadata - No subtitles available]\n{}",
+        lines.join("\n")
+    ))
+}
+
 /// Parse VTT or SRT subtitle file to plain text
 fn parse_subtitle_file(content: &str) -> String {
     let mut texts: Vec<String> = Vec::new();
@@ -444,7 +579,7 @@ pub async fn get_video_info(
     cookie_file_path: Option<String>,
     proxy_url: Option<String>,
 ) -> Result<VideoInfoResponse, String> {
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let mut args = vec![
         "--dump-json".to_string(),
@@ -552,7 +687,7 @@ pub async fn get_playlist_entries(
     cookie_file_path: Option<String>,
     proxy_url: Option<String>,
 ) -> Result<Vec<PlaylistVideoEntry>, String> {
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let mut args = vec![
         "--flat-playlist".to_string(),
@@ -597,10 +732,9 @@ pub async fn get_playlist_entries(
     args.push(url.clone());
     
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
     let output_result = run_ytdlp_with_stderr(&app, &args_ref).await?;
     if !output_result.success && output_result.stdout.trim().is_empty() {
-        return Err("Failed to fetch playlist info".to_string());
+        return Err(BackendError::from_message("Failed to fetch playlist info").to_wire_string());
     }
     let output = output_result.stdout;
     
@@ -659,7 +793,7 @@ pub async fn get_playlist_entries(
     }
     
     if entries.is_empty() {
-        return Err("No videos found in playlist".to_string());
+        return Err(BackendError::from_message("No videos found in playlist").to_wire_string());
     }
     
     Ok(entries)
@@ -675,7 +809,7 @@ pub async fn get_available_subtitles(
     cookie_file_path: Option<String>,
     proxy_url: Option<String>,
 ) -> Result<Vec<SubtitleInfo>, String> {
-    validate_url(&url)?;
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
     
     let mut args = vec![
         "--list-subs".to_string(),

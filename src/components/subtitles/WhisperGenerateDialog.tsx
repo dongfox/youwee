@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select';
 import { useAI } from '@/contexts/AIContext';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import type { SubtitleFormat } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -114,7 +115,7 @@ export function WhisperGenerateDialog({ open: isOpen, onClose }: WhisperGenerate
       if (isCancelled()) {
         return;
       }
-      setError(String(err));
+      setError(localizeUnknownError(err));
     } finally {
       if (activeRunIdRef.current === runId) {
         setIsGenerating(false);

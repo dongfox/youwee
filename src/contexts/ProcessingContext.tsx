@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { localizeUnknownError } from '@/lib/backend-error';
 import type {
   ChatAttachment,
   ChatMessage,
@@ -458,8 +459,9 @@ export function ProcessingProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         console.error('Failed to load video metadata:', error);
         setVideoMetadata(null);
-        setVideoError(String(error));
-        addMessage('system', `Error: ${error}`);
+        const localized = localizeUnknownError(error);
+        setVideoError(localized);
+        addMessage('system', `Error: ${localized}`);
       } finally {
         setIsLoadingVideo(false);
       }
@@ -691,7 +693,7 @@ export function ProcessingProvider({ children }: { children: ReactNode }) {
 
         await loadHistory();
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = localizeUnknownError(error);
         setStatus('error');
         addMessage('system', `Failed: ${errorMessage}`);
       } finally {
@@ -745,7 +747,7 @@ export function ProcessingProvider({ children }: { children: ReactNode }) {
         };
         setMessages((prev) => [...prev, assistantMessage]);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = localizeUnknownError(error);
         setStatus('error');
         console.error('Failed to generate command:', errorMessage);
       } finally {
@@ -805,7 +807,7 @@ export function ProcessingProvider({ children }: { children: ReactNode }) {
 
         await loadHistory();
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = localizeUnknownError(error);
         setStatus('error');
         addMessage('system', `Failed: ${errorMessage}`);
 

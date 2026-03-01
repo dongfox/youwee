@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Clapperboard, Loader2, Timer } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSubtitle } from '@/contexts/SubtitleContext';
+import { localizeUnknownError } from '@/lib/backend-error';
 import { cn } from '@/lib/utils';
 
 interface TimingDialogProps {
@@ -115,7 +116,7 @@ export function TimingDialog({ open, onClose }: TimingDialogProps) {
       });
       setShotTimes(result.shot_times_ms);
     } catch (err) {
-      setShotError(String(err));
+      setShotError(localizeUnknownError(err));
     } finally {
       setIsDetectingShots(false);
     }

@@ -8,13 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Browser Extension for one-click download (Chromium + Firefox)** - You can now send the current video page from browser to Youwee and choose `Download now` or `Add to queue`
-- **Extension setup in Settings** - Added a new Settings → Extension section with direct download buttons and easy install steps for Chromium and Firefox
 - **Dependency source selector (yt-dlp/FFmpeg)** - Added source switching in Settings → Dependencies so users can choose between app-managed binaries and system-managed binaries
 - **Safety confirmation before switching to system source** - Added a confirmation dialog when switching yt-dlp/FFmpeg to system source to prevent accidental changes
 
 ### Changed
 - **OS-aware system source label** - System source label now adapts by platform (`Homebrew` on macOS, `PATH` on Windows, package manager on Linux)
+
+### Fixed
+
+## [0.11.1] - 2026-03-01
+
+### Added
+- **French, Portuguese, and Russian language support** - Full localization for all UI screens, settings, error messages, and metadata labels in Français, Português, and Русский
+- **Backend error localization** - Backend error messages (download failures, network errors, etc.) are now translated to the user's selected language instead of always showing English
+
+### Changed
+- **Refactored transcript fallback chain** - Unified transcript fallback logic across AI summary and processing tasks for more consistent behavior
+
+### Fixed
+- **Transcript fallback for Douyin and TikTok** - Improved transcript extraction for Douyin and TikTok videos that previously failed silently
+- **Transcript errors and short captions** - Transcript errors are now preserved for diagnostics instead of being silently swallowed; short captions are accepted as valid transcripts instead of being rejected
+- **TikTok default settings** - Aligned TikTok default download settings to match platform conventions
+
+## [0.11.0] - 2026-02-20
+
+### Added
+- **Browser Extension for one-click download (Chromium + Firefox)** - You can now send the current video page from browser to Youwee and choose `Download now` or `Add to queue`
+- **Extension setup in Settings** - Added a new Settings → Extension section with direct download buttons and easy install steps for Chromium and Firefox
+
+### Changed
+- **UI/UX refresh for YouTube and Universal pages** - Simplified input, preview, queue, and title-bar interactions for a cleaner and more consistent experience
 
 ### Fixed
 - **Consistent dependency resolution across features** - Unified yt-dlp/FFmpeg source handling in download, metadata, channels, and background polling so selected source is applied consistently

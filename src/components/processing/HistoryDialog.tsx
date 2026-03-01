@@ -106,6 +106,13 @@ export function HistoryDialog({
   const isDateRangeInvalid =
     dateFrom !== '' && dateTo !== '' && new Date(dateFrom) > new Date(dateTo);
   const hasActiveFilters = searchQuery.trim() !== '' || statusFilter !== 'all' || hasDateFilter;
+  const dateLocale = i18n.language.startsWith('vi')
+    ? 'vi-VN'
+    : i18n.language.startsWith('fr')
+      ? 'fr-FR'
+      : i18n.language.startsWith('zh')
+        ? 'zh-CN'
+        : 'en-US';
 
   const formatDateKey = useCallback((date: Date) => {
     const year = date.getFullYear();
@@ -119,14 +126,13 @@ export function HistoryDialog({
       if (!value) return '';
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
-      const locale = i18n.language === 'vi' ? 'vi-VN' : 'en-US';
-      return date.toLocaleDateString(locale, {
+      return date.toLocaleDateString(dateLocale, {
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
       });
     },
-    [i18n.language],
+    [dateLocale],
   );
 
   const dateRangeLabel = useMemo(() => {
@@ -137,12 +143,11 @@ export function HistoryDialog({
   }, [hasDateFilter, dateFrom, dateTo, formatDateInput, t]);
 
   const calendarTitle = useMemo(() => {
-    const locale = i18n.language === 'vi' ? 'vi-VN' : 'en-US';
-    return calendarMonth.toLocaleDateString(locale, {
+    return calendarMonth.toLocaleDateString(dateLocale, {
       month: 'long',
       year: 'numeric',
     });
-  }, [calendarMonth, i18n.language]);
+  }, [calendarMonth, dateLocale]);
 
   const calendarCells = useMemo(() => {
     const year = calendarMonth.getFullYear();
@@ -206,8 +211,7 @@ export function HistoryDialog({
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    const locale = i18n.language === 'vi' ? 'vi-VN' : 'en-US';
-    return date.toLocaleDateString(locale, {
+    return date.toLocaleDateString(dateLocale, {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
