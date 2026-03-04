@@ -127,6 +127,45 @@ const defaultConfig: AIConfig = {
   whisper_model: undefined,
 };
 
+function getRecommendedModel(models: ModelOption[]): string | null {
+  if (!models.length) return null;
+  const recommended = models.find((item) => /recommended/i.test(item.label));
+  return (recommended || models[0]).value;
+}
+
+function normalizeAIConfigForTest(input: AIConfig, modelOptions: ModelOption[]): AIConfig {
+  const apiKey = input.api_key?.trim() || undefined;
+  const rawProxyUrl = input.proxy_url?.trim() || undefined;
+
+  let proxyUrl =
+    input.provider === 'proxy' ? (rawProxyUrl || 'https://api.openai.com') : rawProxyUrl;
+  if (proxyUrl && !/^https?:\/\//i.test(proxyUrl)) {
+    proxyUrl = `https://${proxyUrl}`;
+  }
+
+  const trimmedModel = input.model?.trim() || '';
+  const modelExistsInPreset = modelOptions.some((m) => m.value === trimmedModel);
+  const shouldFallbackModel =
+    input.provider !== 'proxy' &&
+    trimmedModel.startsWith('gemini-') &&
+    !modelExistsInPreset;
+
+  const model =
+    !trimmedModel
+      ? getRecommendedModel(modelOptions) || trimmedModel
+      : shouldFallbackModel
+        ? getRecommendedModel(modelOptions) || trimmedModel
+        : trimmedModel;
+
+  return {
+    ...input,
+    api_key: apiKey,
+    proxy_url: proxyUrl,
+    model,
+  };
+}
+
+
 const AIContext = createContext<AIContextValue | undefined>(undefined);
 
 export function AIProvider({ children }: { children: ReactNode }) {
@@ -183,6 +222,31 @@ export function AIProvider({ children }: { children: ReactNode }) {
     loadModels(config.provider);
   }, [config.provider, loadModels]);
 
+  // Keep model in sync with selected provider only for clearly stale defaults.
+  useEffect(() => {
+    if (!models.length) return;
+    if (config.provider === 'proxy') return;
+
+    const currentModel = config.model?.trim() || '';
+    const hasCurrentModel = models.some((item) => item.value === currentModel);
+    if (hasCurrentModel) return;
+
+    const shouldFallbackModel = !currentModel || currentModel.startsWith('gemini-');
+    if (!shouldFallbackModel) return;
+
+    const fallbackModel = getRecommendedModel(models);
+    if (!fallbackModel) return;
+
+    const newConfig: AIConfig = { ...config, model: fallbackModel };
+    setConfig(newConfig);
+    setTestResult(null);
+
+    invoke('save_ai_config', { config: newConfig }).catch((error) => {
+      console.error('Failed to save auto-corrected AI model:', error);
+    });
+  }, [config, models]);
+
+
   const updateConfig = useCallback(
     async (updates: Partial<AIConfig>) => {
       const newConfig = { ...config, ...updates };
@@ -202,15 +266,30 @@ export function AIProvider({ children }: { children: ReactNode }) {
     setIsTesting(true);
     setTestResult(null);
 
+    const normalizedConfig = normalizeAIConfigForTest(config, models);
+    const shouldPersistNormalizedConfig =
+      normalizedConfig.api_key !== config.api_key ||
+      normalizedConfig.proxy_url !== config.proxy_url ||
+      normalizedConfig.model !== config.model;
+
+    if (shouldPersistNormalizedConfig) {
+      setConfig(normalizedConfig);
+      try {
+        await invoke('save_ai_config', { config: normalizedConfig });
+      } catch (error) {
+        console.error('Failed to save normalized AI config:', error);
+      }
+    }
+
     try {
-      const message = await invoke<string>('test_ai_connection', { config });
+      const message = await invoke<string>('test_ai_connection', { config: normalizedConfig });
       setTestResult({ success: true, message });
     } catch (error) {
       setTestResult({ success: false, message: extractErrorMessage(error) });
     } finally {
       setIsTesting(false);
     }
-  }, [config]);
+  }, [config, models]);
 
   const generateSummary = useCallback(
     async (transcript: string, historyId?: string, title?: string): Promise<string> => {

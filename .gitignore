@@ -29,6 +29,7 @@ src-tauri/bin/yt-dlp*
 
 # Python (old version)
 *.py
+!scripts/crawler_sidecar_service.py
 __pycache__/
 *.pyc
 venv/

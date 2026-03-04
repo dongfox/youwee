@@ -1,5 +1,14 @@
 import i18n from '@/i18n';
 
+
+const ERROR_CODES_WITH_DETAILS = new Set([
+  'BACKEND_UNKNOWN',
+  'AI_API_ERROR',
+  'NETWORK_REQUEST_FAILED',
+  'PARSE_FAILED',
+  'IO_OPERATION_FAILED',
+]);
+
 export const BACKEND_ERROR_PREFIX = '__YOUWEE_ERR__';
 
 export interface BackendErrorPayload {
@@ -143,7 +152,19 @@ export function extractBackendError(error: unknown): BackendErrorPayload {
 export function localizeBackendError(payload: BackendErrorPayload): string {
   const key = `common:backendErrors.${payload.code}`;
   const translated = i18n.t(key, payload.params ?? {});
-  return translated === key ? payload.message : translated;
+  if (translated === key) {
+    return payload.message;
+  }
+
+  // Keep localization, but include backend detail for ambiguous error classes.
+  if (ERROR_CODES_WITH_DETAILS.has(payload.code)) {
+    const detail = payload.message?.trim();
+    if (detail && detail.toLowerCase() !== translated.toLowerCase()) {
+      return `${translated} ${detail}`;
+    }
+  }
+
+  return translated;
 }
 
 export function localizeUnknownError(error: unknown): string {
@@ -177,3 +198,4 @@ export function isNonRetryableBackendError(message: string, code?: string): bool
   const normalizedCode = code || inferBackendErrorCode(message);
   return NON_RETRYABLE_CODES.has(normalizedCode);
 }
+

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Terminal,
 } from 'lucide-react';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -103,12 +104,20 @@ export function DependenciesSection({ highlightId }: DependenciesSectionProps) {
       ? normalizeVersion(latestVersion) !== normalizeVersion(ytdlpInfo.version)
       : false;
 
-  // Check if current channel needs download (not installed)
   const needsDownload = () => {
     if (ytdlpChannel === 'bundled') return false;
     if (!ytdlpAllVersions) return false;
     const info = ytdlpChannel === 'stable' ? ytdlpAllVersions.stable : ytdlpAllVersions.nightly;
     return !info.installed;
+  };
+
+
+  const openYoutubeTroubleshooting = async () => {
+    try {
+      await openUrl('https://github.com/yt-dlp/yt-dlp/issues/14680');
+    } catch (err) {
+      console.error('Failed to open YouTube troubleshooting link:', err);
+    }
   };
 
   // Handle channel change
@@ -774,18 +783,23 @@ export function DependenciesSection({ highlightId }: DependenciesSectionProps) {
                 />
               </div>
             </div>
-            <a
-              href="https://github.com/yt-dlp/yt-dlp/issues/14680"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
+              onClick={openYoutubeTroubleshooting}
               className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-3 pt-3 border-t border-border/50"
             >
               {t('dependencies.learnMore')}
               <ExternalLink className="w-3 h-3" />
-            </a>
+            </button>
           </SettingsCard>
         </SettingsSection>
       </div>
     </>
   );
 }
+
+
+
+
+
+

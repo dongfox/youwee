@@ -213,7 +213,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
           await refreshAllYtdlpVersions();
         }
       } catch (err) {
-        setChannelError(err instanceof Error ? err.message : String(err));
+        setChannelError(localizeUnknownError(err));
       }
     },
     [refreshAllYtdlpVersions, refreshYtdlpVersion],
@@ -314,7 +314,7 @@ export function DependenciesProvider({ children }: { children: ReactNode }) {
           setFfmpegUpdateInfo(null);
         }
       } catch (err) {
-        setFfmpegError(err instanceof Error ? err.message : String(err));
+        setFfmpegError(localizeUnknownError(err));
       }
     },
     [checkFfmpeg],
@@ -653,3 +653,5 @@ export function useDependencies() {
   }
   return context;
 }
+
+

@@ -9,6 +9,7 @@ mod whisper;
 mod metadata;
 mod channels;
 mod external;
+mod sidecar;
 
 pub use logs::*;
 pub use history::*;
@@ -21,3 +22,4 @@ pub use whisper::*;
 pub use metadata::*;
 pub use channels::*;
 pub use external::*;
+pub use sidecar::*;

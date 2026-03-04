@@ -521,6 +521,124 @@ pub async fn generate_with_qwen(
     })
 }
 
+/// Build candidate OpenAI-compatible chat completion endpoints from a proxy base URL.
+fn build_proxy_candidate_urls(proxy_url: &str) -> Vec<String> {
+    let base = proxy_url.trim();
+    let normalized_base = if base.is_empty() {
+        "https://api.openai.com"
+    } else {
+        base
+    }
+    .trim_end_matches('/');
+
+    let mut candidates: Vec<String> = Vec::new();
+
+    let mut push_unique = |url: String| {
+        if !candidates.iter().any(|existing| existing == &url) {
+            candidates.push(url);
+        }
+    };
+
+    if normalized_base.ends_with("/v1/chat/completions") {
+        push_unique(normalized_base.to_string());
+        let without_suffix = normalized_base
+            .trim_end_matches("/v1/chat/completions")
+            .trim_end_matches('/');
+        if !without_suffix.is_empty() {
+            push_unique(format!("{}/chat/completions", without_suffix));
+        }
+    } else if normalized_base.ends_with("/chat/completions") {
+        push_unique(normalized_base.to_string());
+        let without_suffix = normalized_base
+            .trim_end_matches("/chat/completions")
+            .trim_end_matches('/');
+        if !without_suffix.is_empty() {
+            push_unique(format!("{}/v1/chat/completions", without_suffix));
+        }
+    } else if normalized_base.ends_with("/v1") {
+        push_unique(format!("{}/chat/completions", normalized_base));
+        let without_v1 = normalized_base.trim_end_matches("/v1").trim_end_matches('/');
+        if !without_v1.is_empty() {
+            push_unique(format!("{}/chat/completions", without_v1));
+        }
+    } else {
+        push_unique(format!("{}/v1/chat/completions", normalized_base));
+        push_unique(format!("{}/chat/completions", normalized_base));
+    }
+
+    candidates
+}
+
+fn parse_proxy_api_error_message(response_text: &str) -> String {
+    if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(response_text) {
+        if let Some(error_msg) = error_json
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+        {
+            return error_msg.to_string();
+        }
+    }
+
+    if response_text.trim().is_empty() {
+        "Empty response body".to_string()
+    } else {
+        response_text.to_string()
+    }
+}
+
+async fn post_proxy_chat_completion(
+    client: &Client,
+    proxy_url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> Result<(String, String), AIError> {
+    let urls = build_proxy_candidate_urls(proxy_url);
+    let mut last_error = String::new();
+
+    for (index, url) in urls.iter().enumerate() {
+        let response = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| {
+                AIError::NetworkError(format!("Failed to connect to proxy at {}: {}", proxy_url, e))
+            })?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        if status.is_success() {
+            return Ok((url.to_string(), response_text));
+        }
+
+        let parsed_error = parse_proxy_api_error_message(&response_text);
+        let detailed_error = format!("Status {} at {}: {}", status, url, parsed_error);
+
+        if status.as_u16() == 404 && index + 1 < urls.len() {
+            last_error = detailed_error;
+            continue;
+        }
+
+        return Err(AIError::ApiError(detailed_error));
+    }
+
+    let final_error = if last_error.is_empty() {
+        "Unknown proxy API error".to_string()
+    } else {
+        last_error
+    };
+
+    Err(AIError::ApiError(format!(
+        "Proxy endpoint not found. Tried: {}. Last error: {}",
+        urls.join(", "),
+        final_error
+    )))
+}
+
 /// Generate summary using Proxy (OpenAI-compatible API with custom domain)
 pub async fn generate_with_proxy(
     proxy_url: &str,
@@ -533,17 +651,7 @@ pub async fn generate_with_proxy(
 ) -> Result<SummaryResult, AIError> {
     let client = Client::new();
     let prompt = build_prompt(transcript, style, language, title);
-    
-    // Build endpoint URL - support both with and without /v1/chat/completions suffix
-    let base_url = proxy_url.trim_end_matches('/');
-    let url = if base_url.ends_with("/chat/completions") || base_url.ends_with("/v1/chat/completions") {
-        base_url.to_string()
-    } else if base_url.ends_with("/v1") {
-        format!("{}/chat/completions", base_url)
-    } else {
-        format!("{}/v1/chat/completions", base_url)
-    };
-    
+
     let body = serde_json::json!({
         "model": model,
         "messages": [{
@@ -553,46 +661,27 @@ pub async fn generate_with_proxy(
         "temperature": 0.7,
         "max_tokens": 1024,
     });
-    
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AIError::NetworkError(format!("Failed to connect to proxy at {}: {}", proxy_url, e)))?;
-    
-    let status = response.status();
-    let response_text = response.text().await.unwrap_or_default();
-    
-    if !status.is_success() {
-        // Parse error message from response
-        if let Ok(error_json) = serde_json::from_str::<serde_json::Value>(&response_text) {
-            let error_msg = error_json
-                .get("error")
-                .and_then(|e| e.get("message"))
-                .and_then(|m| m.as_str())
-                .unwrap_or(&response_text);
-            return Err(AIError::ApiError(format!("Proxy API error: {}", error_msg)));
-        }
-        return Err(AIError::ApiError(format!("Status {}: {}", status, response_text)));
-    }
-    
+
+    let (used_url, response_text) =
+        post_proxy_chat_completion(&client, proxy_url, api_key, &body).await?;
+
     let json: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| AIError::ParseError(format!("Failed to parse response: {}", e)))?;
-    
+        .map_err(|e| AIError::ParseError(format!("Failed to parse response from {}: {}", used_url, e)))?;
+
     let summary = json
         .get("choices")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("message"))
         .and_then(|m| m.get("content"))
         .and_then(|t| t.as_str())
-        .ok_or_else(|| AIError::ParseError(format!(
-            "No content in response. Response: {}", 
-            &response_text[..response_text.len().min(500)]
-        )))?;
-    
+        .ok_or_else(|| {
+            AIError::ParseError(format!(
+                "No content in response from {}. Response: {}",
+                used_url,
+                &response_text[..response_text.len().min(500)]
+            ))
+        })?;
+
     Ok(SummaryResult {
         summary: summary.trim().to_string(),
         provider: "Proxy".to_string(),
@@ -1009,8 +1098,7 @@ async fn generate_raw_with_proxy(
     prompt: &str,
 ) -> Result<SummaryResult, AIError> {
     let client = Client::new();
-    let url = format!("{}/v1/chat/completions", proxy_url.trim_end_matches('/'));
-    
+
     let body = serde_json::json!({
         "model": model,
         "messages": [{
@@ -1020,34 +1108,27 @@ async fn generate_raw_with_proxy(
         "temperature": 0.3,
         "max_tokens": 2048
     });
-    
-    let response = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AIError::NetworkError(e.to_string()))?;
-    
-    let status = response.status();
-    let response_text = response.text().await.unwrap_or_default();
-    
-    if !status.is_success() {
-        return Err(AIError::ApiError(format!("Proxy API error: {}", response_text)));
-    }
-    
+
+    let (used_url, response_text) =
+        post_proxy_chat_completion(&client, proxy_url, api_key, &body).await?;
+
     let json: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| AIError::ParseError(e.to_string()))?;
-    
+        .map_err(|e| AIError::ParseError(format!("Failed to parse response from {}: {}", used_url, e)))?;
+
     let text = json
         .get("choices")
         .and_then(|c| c.get(0))
         .and_then(|c| c.get("message"))
         .and_then(|m| m.get("content"))
         .and_then(|t| t.as_str())
-        .ok_or_else(|| AIError::ParseError("No text in response".to_string()))?;
-    
+        .ok_or_else(|| {
+            AIError::ParseError(format!(
+                "No text in response from {}. Response: {}",
+                used_url,
+                &response_text[..response_text.len().min(500)]
+            ))
+        })?;
+
     Ok(SummaryResult {
         summary: text.to_string(),
         model: model.to_string(),

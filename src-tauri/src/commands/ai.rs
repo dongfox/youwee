@@ -3,11 +3,16 @@ use std::fs;
 use std::path::PathBuf;
 use crate::services::{AIConfig, SummaryStyle, generate_summary, generate_summary_custom, generate_raw, test_connection};
 use crate::database::update_history_summary;
+use crate::types::BackendError;
+
+fn to_wire_error(message: impl Into<String>) -> String {
+    BackendError::from_message(message).to_wire_string()
+}
 
 /// Get the AI config file path
 fn get_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+        .map_err(|e| to_wire_error(format!("Failed to get app data directory: {}", e)))?;
     Ok(app_data_dir.join("ai_config.json"))
 }
 
@@ -16,9 +21,9 @@ fn get_config_path(app: &AppHandle) -> Result<PathBuf, String> {
 pub async fn save_ai_config(app: AppHandle, config: AIConfig) -> Result<(), String> {
     let path = get_config_path(&app)?;
     let json = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+        .map_err(|e| to_wire_error(format!("Failed to serialize config: {}", e)))?;
     fs::write(&path, json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+        .map_err(|e| to_wire_error(format!("Failed to write config: {}", e)))?;
     Ok(())
 }
 
@@ -32,10 +37,10 @@ pub async fn get_ai_config(app: AppHandle) -> Result<AIConfig, String> {
     }
     
     let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read config: {}", e))?;
+        .map_err(|e| to_wire_error(format!("Failed to read config: {}", e)))?;
     
     let config: AIConfig = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse config: {}", e))?;
+        .map_err(|e| to_wire_error(format!("Failed to parse config: {}", e)))?;
     
     Ok(config)
 }
@@ -43,7 +48,7 @@ pub async fn get_ai_config(app: AppHandle) -> Result<AIConfig, String> {
 /// Test AI connection
 #[tauri::command]
 pub async fn test_ai_connection(config: AIConfig) -> Result<String, String> {
-    test_connection(&config).await.map_err(|e| e.to_string())
+    test_connection(&config).await.map_err(|e| to_wire_error(e.to_string()))
 }
 
 /// Generate summary for a video transcript
@@ -57,16 +62,17 @@ pub async fn generate_video_summary(
     let config = get_ai_config(app.clone()).await?;
     
     if !config.enabled {
-        return Err("AI features are disabled. Enable them in Settings.".to_string());
+        return Err(to_wire_error("AI features are disabled. Enable them in Settings."));
     }
     
     let result = generate_summary(&config, &transcript, title.as_deref())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| to_wire_error(e.to_string()))?;
     
     // If history_id is provided, save summary to database
     if let Some(id) = history_id {
-        update_history_summary(id, result.summary.clone())?;
+        update_history_summary(id, result.summary.clone())
+            .map_err(to_wire_error)?;
     }
     
     Ok(result.summary)
@@ -84,7 +90,7 @@ pub async fn generate_summary_with_options(
     let config = get_ai_config(app.clone()).await?;
     
     if !config.enabled {
-        return Err("AI features are disabled. Enable them in Settings.".to_string());
+        return Err(to_wire_error("AI features are disabled. Enable them in Settings."));
     }
     
     // Parse style string to enum
@@ -97,7 +103,7 @@ pub async fn generate_summary_with_options(
     
     let result = generate_summary_custom(&config, &transcript, &summary_style, &language, title.as_deref())
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| to_wire_error(e.to_string()))?;
     
     Ok(SummaryResult {
         summary: result.summary,
@@ -210,12 +216,14 @@ pub async fn generate_ai_response(
     let config = get_ai_config(app).await?;
     
     if !config.enabled {
-        return Err("AI features are disabled. Enable them in Settings.".to_string());
+        return Err(to_wire_error("AI features are disabled. Enable them in Settings."));
     }
     
     let result = generate_raw(&config, &prompt)
         .await
-        .map_err(|e| format!("AI generation failed: {}", e))?;
+        .map_err(|e| to_wire_error(format!("AI generation failed: {}", e)))?;
     
     Ok(result.summary)
 }
+
+

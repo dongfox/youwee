@@ -237,6 +237,18 @@ pub fn run() {
             commands::set_polling_network_config,
             // External deep-link commands
             commands::consume_pending_external_links,
+            // Crawler sidecar commands (stage-1 integration)
+            commands::crawler_sidecar_attach,
+            commands::crawler_sidecar_status,
+            commands::crawler_sidecar_start_service,
+            commands::crawler_sidecar_stop_service,
+            commands::crawler_sidecar_health,
+            commands::crawler_sidecar_list_tasks,
+            commands::crawler_sidecar_start_task,
+            commands::crawler_sidecar_get_task,
+            commands::crawler_sidecar_stop_task,
+            commands::crawler_sidecar_get_task_logs,
+            commands::crawler_sidecar_collect_task_links,
             // System commands
             set_hide_dock_on_close,
             rebuild_tray_menu_cmd,
