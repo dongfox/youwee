@@ -29,9 +29,11 @@ import {
 } from '@/lib/external-link';
 import {
   ChannelsPage,
+  CrawlerPage,
   DownloadPage,
   HistoryPage,
   LogsPage,
+  M3uPage,
   MetadataPage,
   ProcessingPage,
   SettingsPage,
@@ -328,6 +330,8 @@ function AppContent() {
         {currentPage === 'metadata' && <MetadataPage />}
         {currentPage === 'subtitles' && <SubtitlesPage />}
         {currentPage === 'library' && <HistoryPage />}
+        {currentPage === 'crawler' && <CrawlerPage />}
+        {currentPage === 'm3u' && <M3uPage />}
         {currentPage === 'logs' && <LogsPage />}
         {currentPage === 'settings' && <SettingsPage initialSection={settingsInitialSection} />}
       </MainLayout>

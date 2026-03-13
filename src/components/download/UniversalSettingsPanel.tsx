@@ -58,7 +58,9 @@ interface UniversalSettingsPanelProps {
   onFormatChange: (format: Format) => void;
   onAudioBitrateChange: (bitrate: AudioBitrate) => void;
   onConcurrentChange: (concurrent: number) => void;
+  onDirectMediaSegmentsChange: (segments: number) => void;
   onSelectFolder: () => void;
+  onOpenFolder: () => void;
   onLiveFromStartChange: (enabled: boolean) => void;
 }
 
@@ -70,7 +72,9 @@ export function UniversalSettingsPanel({
   onFormatChange,
   onAudioBitrateChange,
   onConcurrentChange,
+  onDirectMediaSegmentsChange,
   onSelectFolder,
+  onOpenFolder,
   onLiveFromStartChange,
 }: UniversalSettingsPanelProps) {
   const { t } = useTranslation('universal');
@@ -103,7 +107,7 @@ export function UniversalSettingsPanel({
   };
 
   const outputFolderName = settings.outputPath
-    ? settings.outputPath.split('/').pop() || settings.outputPath
+    ? settings.outputPath.split(/[\\/]/).filter(Boolean).pop() || settings.outputPath
     : 'Downloads';
 
   return (
@@ -253,7 +257,7 @@ export function UniversalSettingsPanel({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[1, 2, 3, 4, 5].map((n) => (
+                    {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => (
                       <SelectItem key={n} value={String(n)} className="text-xs">
                         {t('settings.atATime', { count: n })}
                       </SelectItem>
@@ -261,6 +265,30 @@ export function UniversalSettingsPanel({
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[11px] text-muted-foreground">
+                {t('settings.directMediaSegments')}
+              </Label>
+              <Select
+                value={String(settings.directMediaSegments || 4)}
+                onValueChange={(v) => onDirectMediaSegmentsChange(Number(v))}
+                disabled={disabled}
+              >
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4].map((n) => (
+                    <SelectItem key={n} value={String(n)} className="text-xs">
+                      {n === 1
+                        ? t('settings.directMediaSegmentsSingle')
+                        : t('settings.directMediaSegmentsValue', { count: n })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Toggles Section */}
@@ -318,6 +346,18 @@ export function UniversalSettingsPanel({
         <span className="truncate hidden xs:inline">{outputFolderName}</span>
       </button>
 
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onOpenFolder}
+        disabled={!settings.outputPath}
+        className="h-9 px-2.5 text-xs gap-1.5"
+        title={t('settings.openOutputFolder')}
+      >
+        <FolderOpen className="w-3.5 h-3.5" />
+        <span className="hidden sm:inline">{t('settings.openOutputFolder')}</span>
+      </Button>
       {/* File Size Badge */}
       {fileSizeDisplay && (
         <Badge

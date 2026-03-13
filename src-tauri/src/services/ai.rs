@@ -34,6 +34,22 @@ impl Default for SummaryStyle {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ProxyApiStyle {
+    #[serde(rename = "openai")]
+    OpenAI,
+    #[serde(rename = "openai_responses")]
+    OpenAIResponses,
+    #[serde(rename = "newapi")]
+    NewAPI,
+}
+
+
+impl Default for ProxyApiStyle {
+    fn default() -> Self {
+        ProxyApiStyle::OpenAI
+    }
+}
 /// AI Configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AIConfig {
@@ -43,6 +59,8 @@ pub struct AIConfig {
     pub model: String,
     pub ollama_url: Option<String>,
     pub proxy_url: Option<String>, // Custom OpenAI-compatible API endpoint
+    #[serde(default)]
+    pub proxy_api_style: ProxyApiStyle, // Proxy endpoint style
     pub summary_style: SummaryStyle,
     pub summary_language: String, // "auto", "en", "vi", "ja", etc.
     pub timeout_seconds: Option<u64>, // Timeout for AI generation (default 120s)
@@ -68,6 +86,7 @@ impl Default for AIConfig {
             model: "gemini-2.0-flash".to_string(),
             ollama_url: Some("http://localhost:11434".to_string()),
             proxy_url: Some("https://api.openai.com".to_string()),
+            proxy_api_style: ProxyApiStyle::OpenAI,
             summary_style: SummaryStyle::Short,
             summary_language: "auto".to_string(),
             timeout_seconds: Some(120),
@@ -521,49 +540,108 @@ pub async fn generate_with_qwen(
     })
 }
 
-/// Build candidate OpenAI-compatible chat completion endpoints from a proxy base URL.
-fn build_proxy_candidate_urls(proxy_url: &str) -> Vec<String> {
-    let base = proxy_url.trim();
-    let normalized_base = if base.is_empty() {
-        "https://api.openai.com"
+fn normalize_proxy_base_url(proxy_url: &str) -> String {
+    let trimmed = proxy_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        "https://api.openai.com".to_string()
     } else {
-        base
+        trimmed.to_string()
     }
-    .trim_end_matches('/');
+}
 
+fn push_unique_url(candidates: &mut Vec<String>, url: String) {
+    if !url.is_empty() && !candidates.iter().any(|existing| existing == &url) {
+        candidates.push(url);
+    }
+}
+
+fn strip_proxy_known_suffix(base_url: &str) -> String {
+    let known_suffixes = [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/responses",
+        "/responses",
+        "/v1/models",
+        "/models",
+    ];
+
+    for suffix in known_suffixes {
+        if base_url.ends_with(suffix) {
+            return base_url.trim_end_matches(suffix).trim_end_matches('/').to_string();
+        }
+    }
+
+    base_url.to_string()
+}
+
+/// Build candidate Chat Completions endpoints for OpenAI-compatible gateways.
+fn build_proxy_chat_candidate_urls(proxy_url: &str) -> Vec<String> {
+    let normalized = normalize_proxy_base_url(proxy_url);
+    let root = strip_proxy_known_suffix(&normalized);
     let mut candidates: Vec<String> = Vec::new();
 
-    let mut push_unique = |url: String| {
-        if !candidates.iter().any(|existing| existing == &url) {
-            candidates.push(url);
-        }
-    };
+    if normalized.ends_with("/v1/chat/completions") || normalized.ends_with("/chat/completions") {
+        push_unique_url(&mut candidates, normalized.clone());
+    }
 
-    if normalized_base.ends_with("/v1/chat/completions") {
-        push_unique(normalized_base.to_string());
-        let without_suffix = normalized_base
-            .trim_end_matches("/v1/chat/completions")
-            .trim_end_matches('/');
-        if !without_suffix.is_empty() {
-            push_unique(format!("{}/chat/completions", without_suffix));
+    if normalized.ends_with("/v1") {
+        push_unique_url(&mut candidates, format!("{}/chat/completions", normalized));
+    }
+
+    if normalized.ends_with("/v1/responses") || normalized.ends_with("/responses") {
+        let without_responses = normalized.trim_end_matches("/responses").trim_end_matches('/').to_string();
+        if !without_responses.is_empty() {
+            push_unique_url(&mut candidates, format!("{}/chat/completions", without_responses));
         }
-    } else if normalized_base.ends_with("/chat/completions") {
-        push_unique(normalized_base.to_string());
-        let without_suffix = normalized_base
-            .trim_end_matches("/chat/completions")
-            .trim_end_matches('/');
-        if !without_suffix.is_empty() {
-            push_unique(format!("{}/v1/chat/completions", without_suffix));
-        }
-    } else if normalized_base.ends_with("/v1") {
-        push_unique(format!("{}/chat/completions", normalized_base));
-        let without_v1 = normalized_base.trim_end_matches("/v1").trim_end_matches('/');
-        if !without_v1.is_empty() {
-            push_unique(format!("{}/chat/completions", without_v1));
-        }
-    } else {
-        push_unique(format!("{}/v1/chat/completions", normalized_base));
-        push_unique(format!("{}/chat/completions", normalized_base));
+    }
+
+    if !root.is_empty() {
+        push_unique_url(&mut candidates, format!("{}/v1/chat/completions", root));
+        push_unique_url(&mut candidates, format!("{}/chat/completions", root));
+    }
+
+    candidates
+}
+
+/// Build candidate Responses API endpoints.
+fn build_proxy_responses_candidate_urls(proxy_url: &str) -> Vec<String> {
+    let normalized = normalize_proxy_base_url(proxy_url);
+    let root = strip_proxy_known_suffix(&normalized);
+    let mut candidates: Vec<String> = Vec::new();
+
+    if normalized.ends_with("/v1/responses") || normalized.ends_with("/responses") {
+        push_unique_url(&mut candidates, normalized.clone());
+    }
+
+    if normalized.ends_with("/v1") {
+        push_unique_url(&mut candidates, format!("{}/responses", normalized));
+    }
+
+    if !root.is_empty() {
+        push_unique_url(&mut candidates, format!("{}/v1/responses", root));
+        push_unique_url(&mut candidates, format!("{}/responses", root));
+    }
+
+    candidates
+}
+
+/// Build candidate model-list endpoints.
+fn build_proxy_models_candidate_urls(proxy_url: &str) -> Vec<String> {
+    let normalized = normalize_proxy_base_url(proxy_url);
+    let root = strip_proxy_known_suffix(&normalized);
+    let mut candidates: Vec<String> = Vec::new();
+
+    if normalized.ends_with("/v1") {
+        push_unique_url(&mut candidates, format!("{}/models", normalized));
+    }
+
+    if normalized.ends_with("/v1/models") || normalized.ends_with("/models") {
+        push_unique_url(&mut candidates, normalized.clone());
+    }
+
+    if !root.is_empty() {
+        push_unique_url(&mut candidates, format!("{}/v1/models", root));
+        push_unique_url(&mut candidates, format!("{}/models", root));
     }
 
     candidates
@@ -587,13 +665,64 @@ fn parse_proxy_api_error_message(response_text: &str) -> String {
     }
 }
 
-async fn post_proxy_chat_completion(
+fn parse_proxy_chat_text(json: &serde_json::Value) -> Option<String> {
+    json
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+}
+
+fn parse_proxy_responses_text(json: &serde_json::Value) -> Option<String> {
+    if let Some(output_text) = json.get("output_text").and_then(|v| v.as_str()) {
+        if !output_text.trim().is_empty() {
+            return Some(output_text.to_string());
+        }
+    }
+
+    let mut chunks: Vec<String> = Vec::new();
+
+    if let Some(output_items) = json.get("output").and_then(|v| v.as_array()) {
+        for item in output_items {
+            if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                if !text.trim().is_empty() {
+                    chunks.push(text.to_string());
+                }
+            }
+
+            if let Some(content_items) = item.get("content").and_then(|v| v.as_array()) {
+                for content in content_items {
+                    if let Some(text) = content.get("text").and_then(|v| v.as_str()) {
+                        if !text.trim().is_empty() {
+                            chunks.push(text.to_string());
+                        }
+                    }
+                    if let Some(text) = content.get("output_text").and_then(|v| v.as_str()) {
+                        if !text.trim().is_empty() {
+                            chunks.push(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if chunks.is_empty() {
+        None
+    } else {
+        Some(chunks.join("\n"))
+    }
+}
+
+async fn post_proxy_request_with_fallback(
     client: &Client,
     proxy_url: &str,
     api_key: &str,
     body: &serde_json::Value,
+    urls: Vec<String>,
 ) -> Result<(String, String), AIError> {
-    let urls = build_proxy_candidate_urls(proxy_url);
     let mut last_error = String::new();
 
     for (index, url) in urls.iter().enumerate() {
@@ -639,9 +768,30 @@ async fn post_proxy_chat_completion(
     )))
 }
 
+async fn post_proxy_chat_completion(
+    client: &Client,
+    proxy_url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> Result<(String, String), AIError> {
+    let urls = build_proxy_chat_candidate_urls(proxy_url);
+    post_proxy_request_with_fallback(client, proxy_url, api_key, body, urls).await
+}
+
+async fn post_proxy_responses_completion(
+    client: &Client,
+    proxy_url: &str,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> Result<(String, String), AIError> {
+    let urls = build_proxy_responses_candidate_urls(proxy_url);
+    post_proxy_request_with_fallback(client, proxy_url, api_key, body, urls).await
+}
+
 /// Generate summary using Proxy (OpenAI-compatible API with custom domain)
 pub async fn generate_with_proxy(
     proxy_url: &str,
+    proxy_api_style: &ProxyApiStyle,
     api_key: &str,
     model: &str,
     transcript: &str,
@@ -652,35 +802,44 @@ pub async fn generate_with_proxy(
     let client = Client::new();
     let prompt = build_prompt(transcript, style, language, title);
 
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{
-            "role": "user",
-            "content": prompt
-        }],
-        "temperature": 0.7,
-        "max_tokens": 1024,
-    });
-
-    let (used_url, response_text) =
-        post_proxy_chat_completion(&client, proxy_url, api_key, &body).await?;
+    let (used_url, response_text) = match proxy_api_style {
+        ProxyApiStyle::OpenAIResponses => {
+            let body = serde_json::json!({
+                "model": model,
+                "input": prompt,
+                "temperature": 0.7,
+                "max_output_tokens": 1024,
+            });
+            post_proxy_responses_completion(&client, proxy_url, api_key, &body).await?
+        }
+        ProxyApiStyle::OpenAI | ProxyApiStyle::NewAPI => {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": prompt
+                }],
+                "temperature": 0.7,
+                "max_tokens": 1024,
+            });
+            post_proxy_chat_completion(&client, proxy_url, api_key, &body).await?
+        }
+    };
 
     let json: serde_json::Value = serde_json::from_str(&response_text)
         .map_err(|e| AIError::ParseError(format!("Failed to parse response from {}: {}", used_url, e)))?;
 
-    let summary = json
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| {
-            AIError::ParseError(format!(
-                "No content in response from {}. Response: {}",
-                used_url,
-                &response_text[..response_text.len().min(500)]
-            ))
-        })?;
+    let summary = match proxy_api_style {
+        ProxyApiStyle::OpenAIResponses => parse_proxy_responses_text(&json),
+        ProxyApiStyle::OpenAI | ProxyApiStyle::NewAPI => parse_proxy_chat_text(&json),
+    }
+    .ok_or_else(|| {
+        AIError::ParseError(format!(
+            "No content in response from {}. Response: {}",
+            used_url,
+            &response_text[..response_text.len().min(500)]
+        ))
+    })?;
 
     Ok(SummaryResult {
         summary: summary.trim().to_string(),
@@ -688,7 +847,6 @@ pub async fn generate_with_proxy(
         model: model.to_string(),
     })
 }
-
 /// Generate summary based on config
 pub async fn generate_summary(
     config: &AIConfig,
@@ -723,7 +881,7 @@ pub async fn generate_summary(
         AIProvider::Proxy => {
             let api_key = config.api_key.as_ref().ok_or(AIError::NoApiKey)?;
             let proxy_url = config.proxy_url.as_ref().map(|s| s.as_str()).unwrap_or("https://api.openai.com");
-            generate_with_proxy(proxy_url, api_key, &config.model, transcript, &config.summary_style, &config.summary_language, title).await
+            generate_with_proxy(proxy_url, &config.proxy_api_style, api_key, &config.model, transcript, &config.summary_style, &config.summary_language, title).await
         }
     }
 }
@@ -764,7 +922,7 @@ pub async fn generate_summary_custom(
         AIProvider::Proxy => {
             let api_key = config.api_key.as_ref().ok_or(AIError::NoApiKey)?;
             let proxy_url = config.proxy_url.as_ref().map(|s| s.as_str()).unwrap_or("https://api.openai.com");
-            generate_with_proxy(proxy_url, api_key, &config.model, transcript, style, language, title).await
+            generate_with_proxy(proxy_url, &config.proxy_api_style, api_key, &config.model, transcript, style, language, title).await
         }
     }
 }
@@ -800,7 +958,7 @@ pub async fn generate_raw(config: &AIConfig, prompt: &str) -> Result<SummaryResu
         AIProvider::Proxy => {
             let api_key = config.api_key.as_ref().ok_or(AIError::NoApiKey)?;
             let proxy_url = config.proxy_url.as_ref().map(|s| s.as_str()).unwrap_or("https://api.openai.com");
-            generate_raw_with_proxy(proxy_url, api_key, &config.model, prompt).await
+            generate_raw_with_proxy(proxy_url, &config.proxy_api_style, api_key, &config.model, prompt).await
         }
     }
 }
@@ -1093,41 +1251,51 @@ async fn generate_raw_with_qwen(
 /// Raw generation with Proxy (no summarization wrapping)
 async fn generate_raw_with_proxy(
     proxy_url: &str,
+    proxy_api_style: &ProxyApiStyle,
     api_key: &str,
     model: &str,
     prompt: &str,
 ) -> Result<SummaryResult, AIError> {
     let client = Client::new();
 
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{
-            "role": "user",
-            "content": prompt
-        }],
-        "temperature": 0.3,
-        "max_tokens": 2048
-    });
-
-    let (used_url, response_text) =
-        post_proxy_chat_completion(&client, proxy_url, api_key, &body).await?;
+    let (used_url, response_text) = match proxy_api_style {
+        ProxyApiStyle::OpenAIResponses => {
+            let body = serde_json::json!({
+                "model": model,
+                "input": prompt,
+                "temperature": 0.3,
+                "max_output_tokens": 2048,
+            });
+            post_proxy_responses_completion(&client, proxy_url, api_key, &body).await?
+        }
+        ProxyApiStyle::OpenAI | ProxyApiStyle::NewAPI => {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": prompt
+                }],
+                "temperature": 0.3,
+                "max_tokens": 2048
+            });
+            post_proxy_chat_completion(&client, proxy_url, api_key, &body).await?
+        }
+    };
 
     let json: serde_json::Value = serde_json::from_str(&response_text)
         .map_err(|e| AIError::ParseError(format!("Failed to parse response from {}: {}", used_url, e)))?;
 
-    let text = json
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|t| t.as_str())
-        .ok_or_else(|| {
-            AIError::ParseError(format!(
-                "No text in response from {}. Response: {}",
-                used_url,
-                &response_text[..response_text.len().min(500)]
-            ))
-        })?;
+    let text = match proxy_api_style {
+        ProxyApiStyle::OpenAIResponses => parse_proxy_responses_text(&json),
+        ProxyApiStyle::OpenAI | ProxyApiStyle::NewAPI => parse_proxy_chat_text(&json),
+    }
+    .ok_or_else(|| {
+        AIError::ParseError(format!(
+            "No text in response from {}. Response: {}",
+            used_url,
+            &response_text[..response_text.len().min(500)]
+        ))
+    })?;
 
     Ok(SummaryResult {
         summary: text.to_string(),
@@ -1136,6 +1304,125 @@ async fn generate_raw_with_proxy(
     })
 }
 
+fn parse_model_ids(json: &serde_json::Value) -> Vec<String> {
+    let mut models: Vec<String> = Vec::new();
+
+    if let Some(items) = json.get("data").and_then(|v| v.as_array()) {
+        for item in items {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                let trimmed = id.trim();
+                if !trimmed.is_empty() && !models.iter().any(|m| m == trimmed) {
+                    models.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    if models.is_empty() {
+        if let Some(items) = json.as_array() {
+            for item in items {
+                if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                    let trimmed = id.trim();
+                    if !trimmed.is_empty() && !models.iter().any(|m| m == trimmed) {
+                        models.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    models.sort();
+    models
+}
+
+async fn fetch_models_from_candidate_urls(
+    client: &Client,
+    urls: Vec<String>,
+    api_key: &str,
+) -> Result<Vec<String>, AIError> {
+    let mut last_error = String::new();
+
+    for (index, url) in urls.iter().enumerate() {
+        let response = client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .send()
+            .await
+            .map_err(|e| AIError::NetworkError(format!("Failed to fetch model list from {}: {}", url, e)))?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        if status.is_success() {
+            let json: serde_json::Value = serde_json::from_str(&response_text)
+                .map_err(|e| AIError::ParseError(format!("Invalid model list response from {}: {}", url, e)))?;
+            let models = parse_model_ids(&json);
+            if models.is_empty() {
+                return Err(AIError::ParseError(format!(
+                    "Model list is empty from {}. Response: {}",
+                    url,
+                    &response_text[..response_text.len().min(500)]
+                )));
+            }
+            return Ok(models);
+        }
+
+        let parsed_error = parse_proxy_api_error_message(&response_text);
+        let detailed_error = format!("Status {} at {}: {}", status, url, parsed_error);
+
+        if status.as_u16() == 404 && index + 1 < urls.len() {
+            last_error = detailed_error;
+            continue;
+        }
+
+        return Err(AIError::ApiError(detailed_error));
+    }
+
+    let final_error = if last_error.is_empty() {
+        "Unknown provider model list error".to_string()
+    } else {
+        last_error
+    };
+
+    Err(AIError::ApiError(format!(
+        "Model endpoint not found. Tried: {}. Last error: {}",
+        urls.join(", "),
+        final_error
+    )))
+}
+
+pub async fn fetch_provider_models(config: &AIConfig) -> Result<Vec<String>, AIError> {
+    let client = Client::new();
+
+    match config.provider {
+        AIProvider::OpenAI => {
+            let api_key = config.api_key.as_ref().ok_or(AIError::NoApiKey)?;
+            fetch_models_from_candidate_urls(
+                &client,
+                vec![
+                    "https://api.openai.com/v1/models".to_string(),
+                    "https://api.openai.com/models".to_string(),
+                ],
+                api_key,
+            )
+            .await
+        }
+        AIProvider::Proxy => {
+            let api_key = config.api_key.as_ref().ok_or(AIError::NoApiKey)?;
+            let proxy_url = config
+                .proxy_url
+                .as_ref()
+                .map(|s| s.as_str())
+                .unwrap_or("https://api.openai.com");
+            let urls = build_proxy_models_candidate_urls(proxy_url);
+            fetch_models_from_candidate_urls(&client, urls, api_key).await
+        }
+        _ => Err(AIError::ApiError(
+            "Remote model fetching is currently supported for OpenAI and Proxy providers only."
+                .to_string(),
+        )),
+    }
+}
 /// Test AI connection with a simple prompt
 pub async fn test_connection(config: &AIConfig) -> Result<String, AIError> {
     let test_transcript = "This is a test video about programming tutorials.";

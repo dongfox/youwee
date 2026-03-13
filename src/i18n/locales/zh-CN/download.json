@@ -142,6 +142,11 @@
     "stopDownload": "停止下载",
     "clearAll": "清空队列中的所有项目"
   },
+  "notifications": {
+    "downloadCompleteTitle": "下载已完成",
+    "openFileLocation": "打开文件位置",
+    "dismiss": "关闭"
+  },
   "schedule": {
     "title": "定时下载",
     "preset_in1h": "1小时后",

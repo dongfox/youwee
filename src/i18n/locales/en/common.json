@@ -8,6 +8,8 @@
     "metadata": "Metadata",
     "library": "Library",
     "channels": "Channels",
+    "crawler": "Image Crawler",
+    "m3u": "M3U Player",
     "logs": "Logs",
     "settings": "Settings",
     "light": "Light",

@@ -142,6 +142,11 @@
     "stopDownload": "Dừng tải",
     "clearAll": "Xóa tất cả khỏi hàng đợi"
   },
+  "notifications": {
+    "downloadCompleteTitle": "Tải xuống hoàn tất",
+    "openFileLocation": "Mở vị trí file",
+    "dismiss": "Đóng"
+  },
   "schedule": {
     "title": "Hẹn giờ tải",
     "preset_in1h": "Sau 1 giờ",

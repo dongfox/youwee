@@ -124,9 +124,7 @@ export function SummaryPage() {
 
       if (isCancelledRef.current) return;
 
-      console.log('Video info response:', videoInfoResponse);
       const videoInfo = videoInfoResponse.info;
-      console.log('Video info:', videoInfo);
 
       if (!videoInfo || !videoInfo.title) {
         throw new Error('Failed to fetch video information');
@@ -210,9 +208,6 @@ export function SummaryPage() {
     if (!result) return;
 
     const { videoInfo, summary } = result;
-
-    // Debug log
-    console.log('Saving to library:', { videoInfo, summary: summary.substring(0, 50) });
 
     if (!videoInfo.title) {
       setError(t('summary.errors.noTitle'));

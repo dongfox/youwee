@@ -54,14 +54,16 @@ import { Switch } from '@/components/ui/switch';
 import { useAI } from '@/contexts/AIContext';
 import { useDownload } from '@/contexts/DownloadContext';
 import { useUpdater } from '@/contexts/UpdaterContext';
-import type { AIProvider, SummaryStyle } from '@/lib/types';
+import type { AIProvider, ProxyApiStyle, SummaryStyle } from '@/lib/types';
 import { DEFAULT_TRANSCRIPT_LANGUAGES, LANGUAGE_OPTIONS } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 export function SettingsPage({
   initialSection = 'general',
+  initialHighlightId,
 }: {
   initialSection?: SettingsSectionId;
+  initialHighlightId?: string;
 }) {
   const { t } = useTranslation('settings');
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
@@ -69,6 +71,7 @@ export function SettingsPage({
   const [appVersion, setAppVersion] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const initialFocusDoneRef = useRef(false);
 
   const updater = useUpdater();
 
@@ -79,7 +82,28 @@ export function SettingsPage({
 
   useEffect(() => {
     setActiveSection(initialSection);
-  }, [initialSection]);
+    if (initialHighlightId) {
+      setHighlightId(initialHighlightId);
+      initialFocusDoneRef.current = false;
+    } else {
+      initialFocusDoneRef.current = true;
+    }
+  }, [initialSection, initialHighlightId]);
+
+  useEffect(() => {
+    if (!initialHighlightId || initialFocusDoneRef.current) return;
+    const timer = window.setTimeout(() => {
+      const element = document.getElementById(initialHighlightId);
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      initialFocusDoneRef.current = true;
+      window.setTimeout(() => {
+        setHighlightId((prev) => (prev === initialHighlightId ? null : prev));
+      }, 2000);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [initialHighlightId]);
 
   // Handle search navigation
   const handleSearchNavigate = useCallback((section: SettingsSectionId, settingId: string) => {
@@ -232,8 +256,19 @@ function AISettingsContent({
                     ollama: 'llama3.2',
                     proxy: 'gpt-4o-mini',
                   };
+
+                  const nextProvider = v as AIProvider;
+                  if (nextProvider === 'proxy') {
+                    ai.updateConfig({
+                      provider: nextProvider,
+                      model: defaultModels[v] || 'gpt-4o-mini',
+                      proxy_api_style: (ai.config.proxy_api_style || 'openai') as ProxyApiStyle,
+                    });
+                    return;
+                  }
+
                   ai.updateConfig({
-                    provider: v as AIProvider,
+                    provider: nextProvider,
                     model: defaultModels[v] || 'gpt-4o-mini',
                   });
                 }}
@@ -377,7 +412,7 @@ function AISettingsContent({
 
             {/* Proxy URL */}
             {ai.config.provider === 'proxy' && (
-              <div className="space-y-2 py-2">
+              <div className="space-y-3 py-2">
                 <p className="text-sm font-medium">{t('ai.proxyUrl')}</p>
                 <div className="flex items-center gap-2">
                   <Input
@@ -387,6 +422,26 @@ function AISettingsContent({
                     placeholder="https://api.openai.com"
                     className="h-9 flex-1"
                   />
+                </div>
+
+                <div id="ai-proxy-mode" className="space-y-2">
+                  <p className="text-sm font-medium">{t('ai.proxyApiStyle')}</p>
+                  <Select
+                    value={ai.config.proxy_api_style || 'openai'}
+                    onValueChange={(v) => ai.updateConfig({ proxy_api_style: v as ProxyApiStyle })}
+                  >
+                    <SelectTrigger className="h-9 w-full sm:w-[280px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="openai">{t('ai.proxyModeOpenAI')}</SelectItem>
+                      <SelectItem value="openai_responses">{t('ai.proxyModeResponses')}</SelectItem>
+                      <SelectItem value="newapi">{t('ai.proxyModeNewApi')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t('ai.proxyModeOpenAIDesc')}</p>
+                  <p className="text-xs text-muted-foreground">{t('ai.proxyModeResponsesDesc')}</p>
+                  <p className="text-xs text-muted-foreground">{t('ai.proxyModeNewApiDesc')}</p>
                 </div>
               </div>
             )}
@@ -421,6 +476,25 @@ function AISettingsContent({
                     ))}
                   </SelectContent>
                 </Select>
+                {(ai.config.provider === 'proxy' || ai.config.provider === 'openai') && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={ai.fetchProviderModels}
+                    disabled={
+                      ai.isFetchingProviderModels ||
+                      !ai.config.api_key ||
+                      (ai.config.provider === 'proxy' && !ai.config.proxy_url)
+                    }
+                    className="w-full sm:w-auto"
+                  >
+                    {ai.isFetchingProviderModels ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      t('ai.fetchModels')
+                    )}
+                  </Button>
+                )}
               </div>
             </SettingsRow>
 
@@ -747,7 +821,11 @@ function AboutSettingsContent({
   const { settings, updateAutoCheckUpdate } = useDownload();
   const [copied, setCopied] = useState(false);
 
-  const appUrl = 'https://github.com/vanloctech/youwee';
+  const appUrl = 'https://github.com/dongfox/youwee';
+  const appLicenseUrl = `${appUrl}/blob/main/LICENSE`;
+  const appIssuesUrl = `${appUrl}/issues`;
+  const appOwnerUrl = 'https://github.com/dongfox';
+  const appOwnerName = 'dongfox';
   const shareText = t('about.shareText');
   const encodedUrl = encodeURIComponent(appUrl);
   const encodedText = encodeURIComponent(shareText);
@@ -892,7 +970,7 @@ function AboutSettingsContent({
           {/* Quick Links */}
           <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-border/50">
             <a
-              href="https://github.com/vanloctech/youwee"
+              href={appUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-background/50 hover:bg-background text-xs font-medium transition-colors"
@@ -901,7 +979,7 @@ function AboutSettingsContent({
               GitHub
             </a>
             <a
-              href="https://github.com/vanloctech/youwee/blob/main/LICENSE"
+              href={appLicenseUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-background/50 hover:bg-background text-xs font-medium transition-colors"
@@ -910,7 +988,7 @@ function AboutSettingsContent({
               {t('about.license')}
             </a>
             <a
-              href="https://github.com/vanloctech/youwee/issues"
+              href={appIssuesUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-background/50 hover:bg-background text-xs font-medium transition-colors"
@@ -960,12 +1038,12 @@ function AboutSettingsContent({
             <Heart className="w-3.5 h-3.5 text-red-500 fill-red-500" />
             <span className="text-xs text-muted-foreground">{t('about.by')}</span>
             <a
-              href="https://github.com/vanloctech"
+              href={appOwnerUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm font-semibold bg-gradient-to-r from-red-500 via-yellow-500 to-red-500 bg-clip-text text-transparent hover:opacity-80 transition-opacity"
             >
-              vanloctech
+              {appOwnerName}
             </a>
           </div>
         </SettingsCard>

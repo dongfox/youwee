@@ -8,6 +8,8 @@
     "metadata": "元数据",
     "library": "媒体库",
     "channels": "频道",
+    "crawler": "图片抓取",
+    "m3u": "M3U 播放器",
     "logs": "日志",
     "settings": "设置",
     "light": "浅色",

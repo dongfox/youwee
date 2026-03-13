@@ -1,6 +1,5 @@
 import i18n from '@/i18n';
 
-
 const ERROR_CODES_WITH_DETAILS = new Set([
   'BACKEND_UNKNOWN',
   'AI_API_ERROR',
@@ -198,4 +197,3 @@ export function isNonRetryableBackendError(message: string, code?: string): bool
   const normalizedCode = code || inferBackendErrorCode(message);
   return NON_RETRYABLE_CODES.has(normalizedCode);
 }
-

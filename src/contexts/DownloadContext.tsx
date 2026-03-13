@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   extractBackendError,
   localizeBackendError,
@@ -275,6 +276,7 @@ interface DownloadContextType {
 const DownloadContext = createContext<DownloadContextType | null>(null);
 
 export function DownloadProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation('download');
   const [items, setItems] = useState<DownloadItem[]>([]);
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -358,6 +360,12 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   const itemsRef = useRef<DownloadItem[]>([]);
   const settingsRef = useRef<DownloadSettings>(settings);
   const focusClearTimerRef = useRef<number | null>(null);
+  const completedToastSeenRef = useRef<Set<string>>(new Set());
+  const [downloadToast, setDownloadToast] = useState<{
+    id: string;
+    title: string;
+    path?: string;
+  } | null>(null);
 
   // Keep itemsRef in sync with items state
   useEffect(() => {
@@ -450,6 +458,15 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
         setCookieError({ show: true, itemId: progress.id });
       }
 
+      if (progress.status === 'finished' && !completedToastSeenRef.current.has(progress.id)) {
+        completedToastSeenRef.current.add(progress.id);
+        setDownloadToast({
+          id: progress.id,
+          title: progress.title || t('notifications.downloadCompleteTitle'),
+          path: progress.filepath,
+        });
+      }
+
       setItems((currentItems) =>
         currentItems.map((item) =>
           item.id === progress.id
@@ -483,6 +500,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
                       completedFilesize: progress.filesize,
                       completedResolution: progress.resolution,
                       completedFormat: progress.format_ext,
+                      completedFilepath: progress.filepath,
                     }
                   : {}),
               }
@@ -494,7 +512,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [t]);
 
   const parseUrls = useCallback((text: string): string[] => {
     return text
@@ -1094,7 +1112,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateConcurrentDownloads = useCallback((concurrentDownloads: number) => {
-    const value = Math.max(1, Math.min(5, concurrentDownloads));
+    const value = Math.max(1, Math.min(10, concurrentDownloads));
     setSettings((s) => {
       const newSettings = { ...s, concurrentDownloads: value };
       saveSettings(newSettings);
@@ -1365,7 +1383,61 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     updateItemTimeRange,
   };
 
-  return <DownloadContext.Provider value={value}>{children}</DownloadContext.Provider>;
+  return (
+    <DownloadContext.Provider value={value}>
+      {children}
+      {downloadToast && (
+        <div className="toast-slide-in fixed bottom-4 right-4 z-[90] w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-emerald-500/30 bg-background/95 p-4 shadow-2xl backdrop-blur">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">
+                {t('notifications.downloadCompleteTitle')}
+              </p>
+              <p
+                className="mt-1 truncate text-xs text-muted-foreground"
+                title={downloadToast.title}
+              >
+                {downloadToast.title}
+              </p>
+              {downloadToast.path && (
+                <p
+                  className="mt-1 truncate text-[11px] text-muted-foreground"
+                  title={downloadToast.path}
+                >
+                  {downloadToast.path}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => setDownloadToast(null)}
+            >
+              ×
+            </button>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            {downloadToast.path && (
+              <button
+                type="button"
+                className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-500/25 dark:text-emerald-400"
+                onClick={() => void invoke('open_file_location', { filepath: downloadToast.path })}
+              >
+                {t('notifications.openFileLocation')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+              onClick={() => setDownloadToast(null)}
+            >
+              {t('notifications.dismiss')}
+            </button>
+          </div>
+        </div>
+      )}
+    </DownloadContext.Provider>
+  );
 }
 
 export function useDownload() {

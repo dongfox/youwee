@@ -142,6 +142,11 @@
     "stopDownload": "Stop Download",
     "clearAll": "Clear all items from queue"
   },
+  "notifications": {
+    "downloadCompleteTitle": "Download completed",
+    "openFileLocation": "Open file location",
+    "dismiss": "Dismiss"
+  },
   "schedule": {
     "title": "Schedule Download",
     "preset_in1h": "In 1 hour",

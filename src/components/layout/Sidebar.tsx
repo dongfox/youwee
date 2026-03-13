@@ -2,8 +2,10 @@ import {
   ChevronLeft,
   ChevronRight,
   FileJson,
+  FileVideo,
   FolderDown,
   Globe,
+  Images,
   Moon,
   ScrollText,
   Settings,
@@ -29,6 +31,8 @@ export type Page =
   | 'subtitles'
   | 'metadata'
   | 'library'
+  | 'crawler'
+  | 'm3u'
   | 'logs'
   | 'settings';
 
@@ -83,6 +87,16 @@ const navItems: NavItem[] = [
     id: 'library',
     labelKey: 'sidebar.library',
     icon: <FolderDown className="w-5 h-5" />,
+  },
+  {
+    id: 'crawler',
+    labelKey: 'sidebar.crawler',
+    icon: <Images className="w-5 h-5" />,
+  },
+  {
+    id: 'm3u',
+    labelKey: 'sidebar.m3u',
+    icon: <FileVideo className="w-5 h-5" />,
   },
   {
     id: 'logs',

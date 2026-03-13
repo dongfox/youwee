@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   extractBackendError,
   localizeBackendError,
@@ -59,10 +60,35 @@ function formatDuration(seconds: number): string {
 // Check if path is absolute (cross-platform)
 const isAbsolutePath = (path: string): boolean => {
   if (!path) return false;
-  if (path.startsWith('/')) return true;
+  const isWindows = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
   if (/^[A-Za-z]:[\\/]/.test(path)) return true;
+  if (path.startsWith('\\\\')) return true;
+  if (path.startsWith('/')) return !isWindows;
   return false;
 };
+
+async function resolveEffectiveOutputPath(path: string): Promise<string> {
+  if (isAbsolutePath(path)) return path;
+
+  try {
+    const preferred = await downloadDir();
+    if (isAbsolutePath(preferred)) return preferred;
+  } catch (error) {
+    console.error('Failed to resolve downloadDir for universal output path:', error);
+  }
+
+  try {
+    const home = await homeDir();
+    if (home) {
+      const fallback = `${home.replace(/[\\/]+$/g, '')}\\Downloads`;
+      if (isAbsolutePath(fallback)) return fallback;
+    }
+  } catch (error) {
+    console.error('Failed to resolve homeDir for universal output path:', error);
+  }
+
+  return path;
+}
 
 // Simplified settings for Universal downloads (no codec, subtitles, playlist)
 export interface UniversalSettings {
@@ -71,6 +97,7 @@ export interface UniversalSettings {
   outputPath: string;
   audioBitrate: AudioBitrate;
   concurrentDownloads: number;
+  directMediaSegments: number;
   // Live stream settings
   liveFromStart: boolean;
   // Speed limit settings
@@ -81,6 +108,52 @@ export interface UniversalSettings {
   autoRetryEnabled: boolean;
   autoRetryMaxAttempts: number;
   autoRetryDelaySeconds: number;
+}
+
+export interface UniversalImportItem {
+  url: string;
+  dedupeKey?: string;
+  title?: string;
+  outputSubfolder?: string;
+  outputPathOverride?: string;
+  extractor?: string;
+  thumbnail?: string;
+  refererUrl?: string;
+}
+
+function buildUniversalMediaDedupeKey(
+  url: string,
+  explicitKey?: string,
+  refererUrl?: string,
+  title?: string,
+): string {
+  const normalizedExplicit = explicitKey?.trim().toLowerCase();
+  if (normalizedExplicit) return normalizedExplicit;
+
+  const normalizedUrl = url.trim();
+  if (!normalizedUrl) return '';
+
+  try {
+    const parsed = new URL(normalizedUrl);
+    parsed.hash = '';
+    const pathname = parsed.pathname.replace(/\/+$/g, '') || '/';
+    const basename = pathname.split('/').filter(Boolean).pop() || '';
+    const normalizedTitle = title?.trim().toLowerCase() || '';
+    let refererHost = '';
+    if (refererUrl?.trim()) {
+      try {
+        refererHost = new URL(refererUrl.trim()).hostname.toLowerCase();
+      } catch {
+        refererHost = '';
+      }
+    }
+    if (basename && refererHost) {
+      return `media:${refererHost}|${basename.toLowerCase()}|${normalizedTitle}`;
+    }
+    return `url:${parsed.origin.toLowerCase()}${pathname.toLowerCase()}?${parsed.searchParams.toString().toLowerCase()}`;
+  } catch {
+    return `raw:${normalizedUrl.replace(/#.*$/, '').trim().toLowerCase()}`;
+  }
 }
 
 // Load settings from localStorage
@@ -195,6 +268,7 @@ function saveSettings(settings: UniversalSettings) {
         format: settings.format,
         audioBitrate: settings.audioBitrate,
         concurrentDownloads: settings.concurrentDownloads,
+        directMediaSegments: settings.directMediaSegments,
         liveFromStart: settings.liveFromStart,
         speedLimitEnabled: settings.speedLimitEnabled,
         speedLimitValue: settings.speedLimitValue,
@@ -208,13 +282,47 @@ function saveSettings(settings: UniversalSettings) {
     console.error('Failed to save settings:', e);
   }
 }
+function sanitizeFolderSegment(value: string): string {
+  const cleaned = value
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.\s]+$/g, '');
+  return cleaned || 'media';
+}
 
+function joinOutputPath(base: string, segment: string): string {
+  const sep = /^[A-Za-z]:\\/.test(base) || base.includes('\\') ? '\\' : '/';
+  const normalizedBase = base.replace(/[\\/]+$/g, '');
+  return `${normalizedBase}${sep}${segment}`;
+}
+
+function buildSettingsSnapshot(
+  settings: UniversalSettings,
+  outputPathOverride?: string,
+): ItemUniversalSettings {
+  return {
+    quality: settings.quality,
+    format: settings.format,
+    outputPath: outputPathOverride || settings.outputPath,
+    audioBitrate: settings.audioBitrate,
+    directMediaSegments: settings.directMediaSegments,
+    autoRetryEnabled: settings.autoRetryEnabled,
+    autoRetryMaxAttempts: settings.autoRetryMaxAttempts,
+    autoRetryDelaySeconds: settings.autoRetryDelaySeconds,
+  };
+}
+
+function isDirectMediaExtractor(extractor?: string): boolean {
+  return extractor === 'direct-media';
+}
 interface UniversalContextType {
   items: DownloadItem[];
   focusedItemId: string | null;
   isDownloading: boolean;
   settings: UniversalSettings;
   addFromText: (text: string) => Promise<number>;
+  addMediaItems: (entries: UniversalImportItem[]) => Promise<number>;
   enqueueExternalUrl: (
     url: string,
     options?: ExternalEnqueueOptions,
@@ -232,12 +340,17 @@ interface UniversalContextType {
   updateFormat: (format: Format) => void;
   updateAudioBitrate: (bitrate: AudioBitrate) => void;
   updateConcurrentDownloads: (concurrent: number) => void;
+  updateDirectMediaSegments: (segments: number) => void;
   updateLiveFromStart: (enabled: boolean) => void;
   updateAutoRetry: (enabled: boolean, maxAttempts: number, delaySeconds: number) => void;
   // Cookie error detection
   cookieError: { show: boolean; itemId?: string } | null;
   clearCookieError: () => void;
   retryFailedDownload: (itemId: string) => void;
+  retryFailedDownloads: (itemIds: string[]) => {
+    acceptedCount: number;
+    reason: 'ok' | 'busy' | 'empty';
+  };
   // Per-item time range
   updateItemTimeRange: (id: string, start?: string, end?: string) => void;
 }
@@ -245,6 +358,7 @@ interface UniversalContextType {
 const UniversalContext = createContext<UniversalContextType | null>(null);
 
 export function UniversalProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation('universal');
   const [items, setItems] = useState<DownloadItem[]>([]);
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -258,7 +372,8 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
       format: saved.format || 'mp4',
       outputPath: saved.outputPath || '',
       audioBitrate: saved.audioBitrate || 'auto',
-      concurrentDownloads: saved.concurrentDownloads || 1,
+      concurrentDownloads: saved.concurrentDownloads || 3,
+      directMediaSegments: Math.max(1, Math.min(4, saved.directMediaSegments || 4)),
       // Live stream settings
       liveFromStart: saved.liveFromStart === true, // Default to false
       // Speed limit settings
@@ -280,6 +395,12 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
   const itemsRef = useRef<DownloadItem[]>([]);
   const settingsRef = useRef<UniversalSettings>(settings);
   const focusClearTimerRef = useRef<number | null>(null);
+  const completedToastSeenRef = useRef<Set<string>>(new Set());
+  const [downloadToast, setDownloadToast] = useState<{
+    id: string;
+    title: string;
+    path?: string;
+  } | null>(null);
 
   // Keep itemsRef in sync with items state
   useEffect(() => {
@@ -331,7 +452,7 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
         try {
           const home = await homeDir();
           if (home) {
-            const fallbackPath = `${home}Downloads`;
+            const fallbackPath = `${home.replace(/[\\/]+$/g, '')}\\Downloads`;
             setSettings((s) => {
               const newSettings = { ...s, outputPath: fallbackPath };
               saveSettings(newSettings);
@@ -361,6 +482,15 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
           (progress.error_message && cookieErrorPattern.test(progress.error_message)))
       ) {
         setCookieError({ show: true, itemId: progress.id });
+      }
+
+      if (progress.status === 'finished' && !completedToastSeenRef.current.has(progress.id)) {
+        completedToastSeenRef.current.add(progress.id);
+        setDownloadToast({
+          id: progress.id,
+          title: progress.title || t('notifications.downloadCompleteTitle'),
+          path: progress.filepath,
+        });
       }
 
       setItems((currentItems) =>
@@ -394,6 +524,7 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
                       completedFilesize: progress.filesize,
                       completedResolution: progress.resolution,
                       completedFormat: progress.format_ext,
+                      completedFilepath: progress.filepath,
                     }
                   : {}),
               }
@@ -405,7 +536,7 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [t]);
 
   // Fetch metadata for items in background (fire-and-forget)
   const fetchMetadataForItems = useCallback((items: DownloadItem[]) => {
@@ -413,6 +544,9 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
     const proxySettings = loadProxySettings();
 
     for (const item of items) {
+      if (isDirectMediaExtractor(item.extractor)) {
+        continue;
+      }
       invoke<VideoInfoResponse>('get_video_info', {
         url: item.url,
         cookieMode: cookieSettings.mode,
@@ -456,16 +590,7 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
       const currentItems = itemsRef.current;
       const currentSettings = settingsRef.current;
 
-      // Snapshot current settings for these items
-      const settingsSnapshot: ItemUniversalSettings = {
-        quality: currentSettings.quality,
-        format: currentSettings.format,
-        outputPath: currentSettings.outputPath,
-        audioBitrate: currentSettings.audioBitrate,
-        autoRetryEnabled: currentSettings.autoRetryEnabled,
-        autoRetryMaxAttempts: currentSettings.autoRetryMaxAttempts,
-        autoRetryDelaySeconds: currentSettings.autoRetryDelaySeconds,
-      };
+      const settingsSnapshot = buildSettingsSnapshot(currentSettings);
 
       const newItems: DownloadItem[] = urls
         .filter((url) => !currentItems.some((item) => item.url === url))
@@ -488,6 +613,81 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
       }
 
       return newItems.length;
+    },
+    [fetchMetadataForItems],
+  );
+  const addMediaItems = useCallback(
+    async (entries: UniversalImportItem[]): Promise<number> => {
+      if (entries.length === 0) return 0;
+
+      const currentItems = itemsRef.current;
+      const currentSettings = settingsRef.current;
+      const nextItems: DownloadItem[] = [];
+
+      for (const entry of entries) {
+        const normalizedUrl = entry.url.trim();
+        if (!normalizedUrl) continue;
+        const dedupeKey = buildUniversalMediaDedupeKey(
+          normalizedUrl,
+          entry.dedupeKey,
+          entry.refererUrl,
+          entry.title,
+        );
+        if (
+          currentItems.some(
+            (item) =>
+              buildUniversalMediaDedupeKey(
+                item.url,
+                item.dedupeKey,
+                item.refererUrl,
+                item.title,
+              ) === dedupeKey,
+          ) ||
+          nextItems.some(
+            (item) =>
+              buildUniversalMediaDedupeKey(
+                item.url,
+                item.dedupeKey,
+                item.refererUrl,
+                item.title,
+              ) === dedupeKey,
+          )
+        ) {
+          continue;
+        }
+
+        const baseOutputPath = await resolveEffectiveOutputPath(
+          entry.outputPathOverride?.trim() || currentSettings.outputPath,
+        );
+        const folderName = entry.outputSubfolder?.trim()
+          ? sanitizeFolderSegment(entry.outputSubfolder)
+          : '';
+        const outputPath = folderName ? joinOutputPath(baseOutputPath, folderName) : baseOutputPath;
+
+        nextItems.push({
+          id: crypto.randomUUID(),
+          url: normalizedUrl,
+          dedupeKey,
+          title: entry.title?.trim() || normalizedUrl,
+          status: 'pending',
+          progress: 0,
+          speed: '',
+          eta: '',
+          thumbnail: entry.thumbnail?.trim() || undefined,
+          refererUrl: entry.refererUrl?.trim() || undefined,
+          extractor: entry.extractor?.trim() || undefined,
+          settings: buildSettingsSnapshot(currentSettings, outputPath),
+        });
+      }
+
+      if (nextItems.length > 0) {
+        const mergedItems = [...itemsRef.current, ...nextItems];
+        itemsRef.current = mergedItems;
+        setItems(mergedItems);
+        fetchMetadataForItems(nextItems);
+      }
+
+      return nextItems.length;
     },
     [fetchMetadataForItems],
   );
@@ -530,6 +730,7 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
         autoRetryEnabled: currentSettings.autoRetryEnabled,
         autoRetryMaxAttempts: currentSettings.autoRetryMaxAttempts,
         autoRetryDelaySeconds: currentSettings.autoRetryDelaySeconds,
+        directMediaSegments: currentSettings.directMediaSegments,
       };
 
       const newItem: DownloadItem = {
@@ -627,216 +828,245 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
     setItems((items) => items.filter((item) => item.status !== 'completed'));
   }, []);
 
-  const startDownload = useCallback(async () => {
-    const currentItems = itemsRef.current;
-    const itemsToDownload = currentItems.filter(
-      (item) => item.status === 'pending' || item.status === 'error',
-    );
-
-    if (itemsToDownload.length === 0) return;
-
-    setIsDownloading(true);
-    isDownloadingRef.current = true;
-
-    // Reset pending/error items
-    setItems((items) =>
-      items.map((item) => {
-        if (item.status === 'pending' || item.status === 'error') {
-          return {
-            ...item,
-            status: 'pending' as const,
-            progress: 0,
-            speed: '',
-            eta: '',
-            error: undefined,
-            retryState: undefined,
-          };
-        }
-        return item;
-      }),
-    );
-
-    const concurrentLimit = settings.concurrentDownloads || 1;
-
-    const downloadItem = async (item: DownloadItem) => {
-      if (!isDownloadingRef.current) return;
-
-      // Use item's saved settings (snapshot from when it was added)
-      // Fallback to current global settings if not available
-      const itemSettings = item.settings as ItemUniversalSettings | undefined;
-      const logStderr = localStorage.getItem('youwee_log_stderr') !== 'false';
-      const cookieSettings = loadCookieSettings();
-      const proxySettings = loadProxySettings();
-      const embedSettings = loadEmbedSettings();
-      const sponsorBlockArgs = loadSponsorBlockArgs();
-
-      const autoRetryEnabled = itemSettings?.autoRetryEnabled ?? settings.autoRetryEnabled;
-      const maxRetries = clampAutoRetryMaxAttempts(
-        itemSettings?.autoRetryMaxAttempts ?? settings.autoRetryMaxAttempts,
-      );
-      const retryDelaySeconds = clampAutoRetryDelaySeconds(
-        itemSettings?.autoRetryDelaySeconds ?? settings.autoRetryDelaySeconds,
+  const startDownloadInternal = useCallback(
+    async (targetIds?: Set<string>) => {
+      const currentItems = itemsRef.current;
+      const itemsToDownload = currentItems.filter(
+        (item) =>
+          (item.status === 'pending' || item.status === 'error') &&
+          (!targetIds || targetIds.has(item.id)),
       );
 
-      let retryIndex = 0;
+      if (itemsToDownload.length === 0) return;
 
-      while (isDownloadingRef.current) {
-        setItems((items) =>
-          items.map((i) =>
-            i.id === item.id
-              ? { ...i, status: 'downloading', error: undefined, retryState: undefined }
-              : i,
-          ),
+      setIsDownloading(true);
+      isDownloadingRef.current = true;
+
+      // Reset pending/error items
+      setItems((items) =>
+        items.map((item) => {
+          if (
+            (item.status === 'pending' || item.status === 'error') &&
+            (!targetIds || targetIds.has(item.id))
+          ) {
+            return {
+              ...item,
+              status: 'pending' as const,
+              progress: 0,
+              speed: '',
+              eta: '',
+              error: undefined,
+              retryState: undefined,
+            };
+          }
+          return item;
+        }),
+      );
+
+      const concurrentLimit = settings.concurrentDownloads || 1;
+
+      const downloadItem = async (item: DownloadItem) => {
+        if (!isDownloadingRef.current) return;
+
+        // Use item's saved settings (snapshot from when it was added)
+        // Fallback to current global settings if not available
+        const itemSettings = item.settings as ItemUniversalSettings | undefined;
+        const resolvedOutputPath = await resolveEffectiveOutputPath(
+          itemSettings?.outputPath ?? settings.outputPath,
+        );
+        const logStderr = localStorage.getItem('youwee_log_stderr') !== 'false';
+        const cookieSettings = loadCookieSettings();
+        const proxySettings = loadProxySettings();
+        const embedSettings = loadEmbedSettings();
+        const sponsorBlockArgs = loadSponsorBlockArgs();
+
+        const autoRetryEnabled = itemSettings?.autoRetryEnabled ?? settings.autoRetryEnabled;
+        const maxRetries = clampAutoRetryMaxAttempts(
+          itemSettings?.autoRetryMaxAttempts ?? settings.autoRetryMaxAttempts,
+        );
+        const retryDelaySeconds = clampAutoRetryDelaySeconds(
+          itemSettings?.autoRetryDelaySeconds ?? settings.autoRetryDelaySeconds,
         );
 
-        try {
-          await invoke('download_video', {
-            id: item.id,
-            url: item.url,
-            outputPath: itemSettings?.outputPath ?? settings.outputPath,
-            quality: itemSettings?.quality ?? settings.quality,
-            format: itemSettings?.format ?? settings.format,
-            downloadPlaylist: false,
-            videoCodec: 'auto', // Use auto for universal downloads
-            audioBitrate: itemSettings?.audioBitrate ?? settings.audioBitrate,
-            playlistLimit: null,
-            subtitleMode: 'off',
-            subtitleLangs: '',
-            subtitleEmbed: false,
-            subtitleFormat: 'srt',
-            // Logging settings
-            logStderr,
-            // Cookie settings
-            cookieMode: cookieSettings.mode,
-            cookieBrowser: cookieSettings.browser || null,
-            cookieBrowserProfile: cookieSettings.browserProfile || null,
-            cookieFilePath: cookieSettings.filePath || null,
-            // Proxy settings
-            proxyUrl: buildProxyUrl(proxySettings) || null,
-            // Post-processing settings (from main download settings)
-            embedMetadata: embedSettings.embedMetadata,
-            embedThumbnail: embedSettings.embedThumbnail,
-            // Live stream settings
-            liveFromStart: settings.liveFromStart,
-            // Speed limit settings
-            speedLimit: settings.speedLimitEnabled
-              ? `${settings.speedLimitValue}${settings.speedLimitUnit}`
-              : null,
-            // SponsorBlock settings
-            sponsorblockRemove: sponsorBlockArgs.remove,
-            sponsorblockMark: sponsorBlockArgs.mark,
-            // Download sections (time range)
-            downloadSections:
-              itemSettings?.timeRangeStart && itemSettings?.timeRangeEnd
-                ? `*${itemSettings.timeRangeStart}-${itemSettings.timeRangeEnd}`
-                : null,
-            // Title from video info fetch
-            title: item.title || null,
-            // Thumbnail from video info fetch (for non-YouTube sites)
-            thumbnail: item.thumbnail || null,
-            // Source/extractor from video info fetch (e.g. "BiliBili", "TikTok")
-            source: item.extractor || null,
-          });
+        let retryIndex = 0;
 
+        while (isDownloadingRef.current) {
           setItems((items) =>
             items.map((i) =>
               i.id === item.id
-                ? { ...i, status: 'completed', progress: 100, retryState: undefined }
+                ? { ...i, status: 'downloading', error: undefined, retryState: undefined }
                 : i,
             ),
           );
-          return;
-        } catch (error) {
-          const parsedError = extractBackendError(error);
-          const errorMessage = localizeBackendError(parsedError);
-          const canRetry =
-            isDownloadingRef.current &&
-            autoRetryEnabled &&
-            retryIndex < maxRetries &&
-            !isNonRetryableError(parsedError.message, parsedError.code) &&
-            isRetryableError(parsedError.message, parsedError.code, parsedError.retryable);
 
-          if (!canRetry) {
+          try {
+            if (isDirectMediaExtractor(item.extractor)) {
+              await invoke('download_direct_media', {
+                id: item.id,
+                url: item.url,
+                outputPath: resolvedOutputPath,
+                title: item.title || null,
+                thumbnail: item.thumbnail || null,
+                source: item.extractor || null,
+                proxyUrl: buildProxyUrl(proxySettings) || null,
+                refererUrl: item.refererUrl || null,
+                maxSegments: itemSettings?.directMediaSegments ?? settings.directMediaSegments,
+              });
+            } else {
+              await invoke('download_video', {
+                id: item.id,
+                url: item.url,
+                outputPath: resolvedOutputPath,
+                quality: itemSettings?.quality ?? settings.quality,
+                format: itemSettings?.format ?? settings.format,
+                downloadPlaylist: false,
+                videoCodec: 'auto', // Use auto for universal downloads
+                audioBitrate: itemSettings?.audioBitrate ?? settings.audioBitrate,
+                playlistLimit: null,
+                subtitleMode: 'off',
+                subtitleLangs: '',
+                subtitleEmbed: false,
+                subtitleFormat: 'srt',
+                // Logging settings
+                logStderr,
+                // Cookie settings
+                cookieMode: cookieSettings.mode,
+                cookieBrowser: cookieSettings.browser || null,
+                cookieBrowserProfile: cookieSettings.browserProfile || null,
+                cookieFilePath: cookieSettings.filePath || null,
+                // Proxy settings
+                proxyUrl: buildProxyUrl(proxySettings) || null,
+                // Post-processing settings (from main download settings)
+                embedMetadata: embedSettings.embedMetadata,
+                embedThumbnail: embedSettings.embedThumbnail,
+                // Live stream settings
+                liveFromStart: settings.liveFromStart,
+                // Speed limit settings
+                speedLimit: settings.speedLimitEnabled
+                  ? `${settings.speedLimitValue}${settings.speedLimitUnit}`
+                  : null,
+                // SponsorBlock settings
+                sponsorblockRemove: sponsorBlockArgs.remove,
+                sponsorblockMark: sponsorBlockArgs.mark,
+                // Download sections (time range)
+                downloadSections:
+                  itemSettings?.timeRangeStart && itemSettings?.timeRangeEnd
+                    ? `*${itemSettings.timeRangeStart}-${itemSettings.timeRangeEnd}`
+                    : null,
+                // Title from video info fetch
+                title: item.title || null,
+                // Thumbnail from video info fetch (for non-YouTube sites)
+                thumbnail: item.thumbnail || null,
+                // Source/extractor from video info fetch (e.g. "BiliBili", "TikTok")
+                source: item.extractor || null,
+              });
+            }
+
             setItems((items) =>
               items.map((i) =>
                 i.id === item.id
-                  ? { ...i, status: 'error', error: errorMessage, retryState: undefined }
+                  ? { ...i, status: 'completed', progress: 100, retryState: undefined }
                   : i,
               ),
             );
             return;
-          }
+          } catch (error) {
+            const parsedError = extractBackendError(error);
+            const errorMessage = localizeBackendError(parsedError);
+            const canRetry =
+              isDownloadingRef.current &&
+              autoRetryEnabled &&
+              retryIndex < maxRetries &&
+              !isNonRetryableError(parsedError.message, parsedError.code) &&
+              isRetryableError(parsedError.message, parsedError.code, parsedError.retryable);
 
-          retryIndex += 1;
-          setItems((items) =>
-            items.map((i) =>
-              i.id === item.id
-                ? {
-                    ...i,
-                    status: 'pending',
-                    error: errorMessage,
-                    retryState: {
-                      retryIndex,
-                      maxRetries,
-                      delaySeconds: retryDelaySeconds,
-                      remainingSeconds: retryDelaySeconds,
-                    },
-                  }
-                : i,
-            ),
-          );
-
-          const shouldContinue = await waitWithCancellation(
-            retryDelaySeconds * 1000,
-            () => !isDownloadingRef.current,
-            (remainingSeconds) => {
+            if (!canRetry) {
               setItems((items) =>
                 items.map((i) =>
-                  i.id === item.id && i.retryState
-                    ? {
-                        ...i,
-                        retryState: {
-                          ...i.retryState,
-                          remainingSeconds,
-                        },
-                      }
+                  i.id === item.id
+                    ? { ...i, status: 'error', error: errorMessage, retryState: undefined }
                     : i,
                 ),
               );
-            },
-          );
+              return;
+            }
 
-          if (!shouldContinue) {
-            return;
+            retryIndex += 1;
+            setItems((items) =>
+              items.map((i) =>
+                i.id === item.id
+                  ? {
+                      ...i,
+                      status: 'pending',
+                      error: errorMessage,
+                      retryState: {
+                        retryIndex,
+                        maxRetries,
+                        delaySeconds: retryDelaySeconds,
+                        remainingSeconds: retryDelaySeconds,
+                      },
+                    }
+                  : i,
+              ),
+            );
+
+            const shouldContinue = await waitWithCancellation(
+              retryDelaySeconds * 1000,
+              () => !isDownloadingRef.current,
+              (remainingSeconds) => {
+                setItems((items) =>
+                  items.map((i) =>
+                    i.id === item.id && i.retryState
+                      ? {
+                          ...i,
+                          retryState: {
+                            ...i.retryState,
+                            remainingSeconds,
+                          },
+                        }
+                      : i,
+                  ),
+                );
+              },
+            );
+
+            if (!shouldContinue) {
+              return;
+            }
           }
-        }
-      }
-    };
-
-    try {
-      const queue = [...itemsToDownload];
-      const activeDownloads: Promise<void>[] = [];
-
-      const processNext = async (): Promise<void> => {
-        while (isDownloadingRef.current && queue.length > 0) {
-          const item = queue.shift();
-          if (!item) break;
-          await downloadItem(item);
         }
       };
 
-      const workerCount = Math.min(concurrentLimit, itemsToDownload.length);
+      try {
+        const queue = [...itemsToDownload];
+        const activeDownloads: Promise<void>[] = [];
 
-      for (let i = 0; i < workerCount; i++) {
-        activeDownloads.push(processNext());
+        const processNext = async (): Promise<void> => {
+          while (isDownloadingRef.current && queue.length > 0) {
+            const item = queue.shift();
+            if (!item) break;
+            await downloadItem(item);
+          }
+        };
+
+        const workerCount = Math.min(concurrentLimit, itemsToDownload.length);
+
+        for (let i = 0; i < workerCount; i++) {
+          activeDownloads.push(processNext());
+        }
+
+        await Promise.all(activeDownloads);
+      } finally {
+        setIsDownloading(false);
+        isDownloadingRef.current = false;
       }
+    },
+    [settings],
+  );
 
-      await Promise.all(activeDownloads);
-    } finally {
-      setIsDownloading(false);
-      isDownloadingRef.current = false;
-    }
-  }, [settings]);
+  const startDownload = useCallback(async () => {
+    await startDownloadInternal();
+  }, [startDownloadInternal]);
 
   const stopDownload = useCallback(async () => {
     try {
@@ -874,9 +1104,18 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateConcurrentDownloads = useCallback((concurrentDownloads: number) => {
-    const value = Math.max(1, Math.min(5, concurrentDownloads));
+    const value = Math.max(1, Math.min(10, concurrentDownloads));
     setSettings((s) => {
       const newSettings = { ...s, concurrentDownloads: value };
+      saveSettings(newSettings);
+      return newSettings;
+    });
+  }, []);
+
+  const updateDirectMediaSegments = useCallback((segments: number) => {
+    const value = Math.max(1, Math.min(4, segments));
+    setSettings((s) => {
+      const newSettings = { ...s, directMediaSegments: value };
       saveSettings(newSettings);
       return newSettings;
     });
@@ -911,25 +1150,43 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
     setCookieError(null);
   }, []);
 
-  // Retry a failed download (reset item and restart)
+  // Retry failed downloads for specific items
+  const retryFailedDownloads = useCallback(
+    (itemIds: string[]) => {
+      const targetIds = new Set(itemIds.filter(Boolean));
+      if (targetIds.size === 0) {
+        return { acceptedCount: 0, reason: 'empty' as const };
+      }
+      if (isDownloadingRef.current) {
+        return { acceptedCount: 0, reason: 'busy' as const };
+      }
+
+      const nextItems = itemsRef.current.map((item) =>
+        targetIds.has(item.id)
+          ? {
+              ...item,
+              status: 'pending' as const,
+              progress: 0,
+              error: undefined,
+              retryState: undefined,
+            }
+          : item,
+      );
+      itemsRef.current = nextItems;
+      setItems(nextItems);
+      setCookieError(null);
+      setTimeout(() => {
+        void startDownloadInternal(targetIds);
+      }, 100);
+      return { acceptedCount: targetIds.size, reason: 'ok' as const };
+    },
+    [startDownloadInternal],
+  );
   const retryFailedDownload = useCallback(
     (itemId: string) => {
-      // Reset item status to pending
-      setItems((currentItems) =>
-        currentItems.map((item) =>
-          item.id === itemId
-            ? { ...item, status: 'pending', progress: 0, error: undefined, retryState: undefined }
-            : item,
-        ),
-      );
-      // Clear cookie error
-      setCookieError(null);
-      // Use a short delay to ensure state update before starting download
-      setTimeout(() => {
-        startDownload();
-      }, 100);
+      retryFailedDownloads([itemId]);
     },
-    [startDownload],
+    [retryFailedDownloads],
   );
 
   const value: UniversalContextType = {
@@ -938,6 +1195,7 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
     isDownloading,
     settings,
     addFromText,
+    addMediaItems,
     enqueueExternalUrl,
     focusItem,
     importFromFile,
@@ -952,17 +1210,73 @@ export function UniversalProvider({ children }: { children: ReactNode }) {
     updateFormat,
     updateAudioBitrate,
     updateConcurrentDownloads,
+    updateDirectMediaSegments,
     updateLiveFromStart,
     updateAutoRetry,
     // Cookie error detection
     cookieError,
     clearCookieError,
     retryFailedDownload,
+    retryFailedDownloads,
     // Per-item time range
     updateItemTimeRange,
   };
 
-  return <UniversalContext.Provider value={value}>{children}</UniversalContext.Provider>;
+  return (
+    <UniversalContext.Provider value={value}>
+      {children}
+      {downloadToast && (
+        <div className="toast-slide-in fixed bottom-4 right-4 z-[90] w-[360px] max-w-[calc(100vw-2rem)] rounded-xl border border-emerald-500/30 bg-background/95 p-4 shadow-2xl backdrop-blur">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-foreground">
+                {t('notifications.downloadCompleteTitle')}
+              </p>
+              <p
+                className="mt-1 truncate text-xs text-muted-foreground"
+                title={downloadToast.title}
+              >
+                {downloadToast.title}
+              </p>
+              {downloadToast.path && (
+                <p
+                  className="mt-1 truncate text-[11px] text-muted-foreground"
+                  title={downloadToast.path}
+                >
+                  {downloadToast.path}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => setDownloadToast(null)}
+            >
+              ×
+            </button>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            {downloadToast.path && (
+              <button
+                type="button"
+                className="rounded-md bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-500/25 dark:text-emerald-400"
+                onClick={() => void invoke('open_file_location', { filepath: downloadToast.path })}
+              >
+                {t('notifications.openFileLocation')}
+              </button>
+            )}
+            <button
+              type="button"
+              className="rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
+              onClick={() => setDownloadToast(null)}
+            >
+              {t('notifications.dismiss')}
+            </button>
+          </div>
+        </div>
+      )}
+    </UniversalContext.Provider>
+  );
 }
 
 export function useUniversal() {

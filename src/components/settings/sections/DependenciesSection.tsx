@@ -1,3 +1,4 @@
+import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   AlertCircle,
   Check,
@@ -10,7 +11,6 @@ import {
   RefreshCw,
   Terminal,
 } from 'lucide-react';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -110,7 +110,6 @@ export function DependenciesSection({ highlightId }: DependenciesSectionProps) {
     const info = ytdlpChannel === 'stable' ? ytdlpAllVersions.stable : ytdlpAllVersions.nightly;
     return !info.installed;
   };
-
 
   const openYoutubeTroubleshooting = async () => {
     try {
@@ -797,9 +796,3 @@ export function DependenciesSection({ highlightId }: DependenciesSectionProps) {
     </>
   );
 }
-
-
-
-
-
-

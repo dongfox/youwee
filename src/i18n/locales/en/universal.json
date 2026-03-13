@@ -46,7 +46,11 @@
     "liveFromStart": "Live from start",
     "autoRetry": "Auto Retry",
     "retryAttempts": "Attempts",
-    "retryDelaySeconds": "Delay (s)"
+    "retryDelaySeconds": "Delay (s)",
+    "directMediaSegments": "Direct Media Segments",
+    "directMediaSegmentsSingle": "Single stream",
+    "directMediaSegmentsValue": "{{count}} segments",
+    "openOutputFolder": "Open output folder"
   },
   "quality": {
     "360": "Low 360p",
@@ -103,12 +107,22 @@
     "generating": "Generating...",
     "showMore": "Show more",
     "showLess": "Show less",
-    "regenerateSummary": "Regenerate summary"
+    "regenerateSummary": "Regenerate summary",
+    "directMedia": "Direct media",
+    "singleStream": "Single stream",
+    "segmentedDirect": "{{count}}-segment direct",
+    "openFolder": "Open folder",
+    "outputPath": "Output path"
   },
   "actions": {
     "startDownload": "Start Download",
     "stopDownload": "Stop Download",
     "clearAll": "Clear all items from queue"
+  },
+  "notifications": {
+    "downloadCompleteTitle": "Download completed",
+    "openFileLocation": "Open file location",
+    "dismiss": "Dismiss"
   },
   "schedule": {
     "title": "Schedule Download",

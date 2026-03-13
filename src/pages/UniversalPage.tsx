@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { Clock, Play, Square, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -57,6 +58,7 @@ export function UniversalPage({ onNavigateToSettings }: UniversalPageProps) {
     updateFormat,
     updateAudioBitrate,
     updateConcurrentDownloads,
+    updateDirectMediaSegments,
     updateLiveFromStart,
     cookieError,
     clearCookieError,
@@ -98,6 +100,15 @@ export function UniversalPage({ onNavigateToSettings }: UniversalPageProps) {
     startDownload();
   };
 
+  const handleOpenOutputFolder = async () => {
+    if (!settings.outputPath) return;
+    try {
+      await invoke('open_file_location', { filepath: settings.outputPath });
+    } catch (error) {
+      console.error('Failed to open output folder:', error);
+    }
+  };
+
   // Calculate total file size from fetched video info (in bytes)
   const totalFileSize = items.reduce((sum, item) => {
     return sum + (item.filesize || 0);
@@ -135,7 +146,9 @@ export function UniversalPage({ onNavigateToSettings }: UniversalPageProps) {
             onFormatChange={updateFormat}
             onAudioBitrateChange={updateAudioBitrate}
             onConcurrentChange={updateConcurrentDownloads}
+            onDirectMediaSegmentsChange={updateDirectMediaSegments}
             onSelectFolder={selectOutputFolder}
+            onOpenFolder={handleOpenOutputFolder}
             onLiveFromStartChange={updateLiveFromStart}
           />
         </div>

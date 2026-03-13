@@ -1,8 +1,10 @@
+import { invoke } from '@tauri-apps/api/core';
 import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
+  FolderOpen,
   Globe,
   HardDrive,
   Lightbulb,
@@ -135,6 +137,7 @@ export function UniversalQueueItem({
   const isCompleted = item.status === 'completed';
   const isError = item.status === 'error';
   const isPending = item.status === 'pending';
+  const isDirectMedia = item.extractor === 'direct-media';
   const retryState = item.retryState;
   const isFetchingMeta = isPending && !item.thumbnail && item.title === item.url && !item.extractor;
 
@@ -191,6 +194,15 @@ export function UniversalQueueItem({
   const isRangeValid =
     !timeStart || !timeEnd || (startSeconds >= 0 && endSeconds >= 0 && startSeconds < endSeconds);
   const canApply = timeStart !== '' && timeEnd !== '' && isStartValid && isEndValid && isRangeValid;
+
+  const handleOpenCompletedFolder = useCallback(async () => {
+    if (!item.completedFilepath) return;
+    try {
+      await invoke('open_file_location', { filepath: item.completedFilepath });
+    } catch (error) {
+      console.error('Failed to open completed file location:', error);
+    }
+  }, [item.completedFilepath]);
 
   const handleGenerateSummary = () => {
     if (isGenerating) return;
@@ -299,7 +311,15 @@ export function UniversalQueueItem({
                 ) : (
                   <>
                     <span>{item.progress.toFixed(0)}%</span>
-                    {item.speed && <span>{item.speed}</span>}
+                    <div className="flex items-center gap-1.5">
+                      {item.speed && <span>{item.speed}</span>}
+                      {item.eta && (
+                        <>
+                          {item.speed && <span className="text-white/50">•</span>}
+                          <span>ETA {item.eta}</span>
+                        </>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -404,6 +424,22 @@ export function UniversalQueueItem({
             </span>
           )}
 
+          {isDirectMedia && (
+            <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-600 dark:text-sky-400 font-medium">
+              <Globe className="w-3 h-3" />
+              {t('queue.directMedia')}
+            </span>
+          )}
+
+          {isDirectMedia && itemSettings?.directMediaSegments ? (
+            <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-medium">
+              <HardDrive className="w-3 h-3" />
+              {itemSettings.directMediaSegments <= 1
+                ? t('queue.singleStream')
+                : t('queue.segmentedDirect', { count: itemSettings.directMediaSegments })}
+            </span>
+          ) : null}
+
           {/* Settings badges for pending/downloading items */}
           {(isPending || isActive) && itemSettings && (
             <>
@@ -414,6 +450,29 @@ export function UniversalQueueItem({
               <span className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 font-medium uppercase">
                 {itemSettings.format}
               </span>
+              {isActive && item.speed && (
+                <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 font-medium">
+                  <HardDrive className="w-3 h-3" />
+                  {item.speed}
+                </span>
+              )}
+              {isActive && item.eta && (
+                <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium">
+                  <Clock className="w-3 h-3" />
+                  ETA {item.eta}
+                </span>
+              )}
+              {itemSettings.outputPath && (
+                <span
+                  className="max-w-full inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground"
+                  title={itemSettings.outputPath}
+                >
+                  <FolderOpen className="w-3 h-3" />
+                  <span className="truncate max-w-[280px]">
+                    {t('queue.outputPath')}: {itemSettings.outputPath}
+                  </span>
+                </span>
+              )}
             </>
           )}
 
@@ -428,6 +487,15 @@ export function UniversalQueueItem({
           {/* Completed Info: Resolution, Size, Format */}
           {isCompleted && (
             <>
+              {item.completedFilepath && (
+                <span
+                  className="max-w-full inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground"
+                  title={item.completedFilepath}
+                >
+                  <FolderOpen className="w-3 h-3" />
+                  <span className="truncate max-w-[280px]">{item.completedFilepath}</span>
+                </span>
+              )}
               {item.completedResolution && (
                 <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-muted/50 text-muted-foreground">
                   <MonitorPlay className="w-3 h-3" />
@@ -477,6 +545,16 @@ export function UniversalQueueItem({
         {/* Actions Row — interactive buttons, visually distinct */}
         {!isActive && !isError && (
           <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            {isCompleted && item.completedFilepath && (
+              <button
+                type="button"
+                onClick={handleOpenCompletedFolder}
+                className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:border-emerald-500/50 hover:bg-emerald-500/10 transition-colors font-medium"
+              >
+                <FolderOpen className="w-3 h-3" />
+                {t('queue.openFolder')}
+              </button>
+            )}
             {/* Time Range button (only when pending) */}
             {isPending && itemSettings && (
               <button

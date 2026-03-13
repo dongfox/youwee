@@ -46,7 +46,11 @@
     "liveFromStart": "Phát trực tiếp từ đầu",
     "autoRetry": "Tự động thử lại",
     "retryAttempts": "Số lần",
-    "retryDelaySeconds": "Độ trễ (giây)"
+    "retryDelaySeconds": "Độ trễ (giây)",
+    "directMediaSegments": "Phan doan tai truc tiep",
+    "directMediaSegmentsSingle": "Mot luong",
+    "directMediaSegmentsValue": "{{count}} phan",
+    "openOutputFolder": "Mo thu muc dau ra"
   },
   "quality": {
     "360": "Thấp 360p",
@@ -103,12 +107,22 @@
     "generating": "Đang tạo...",
     "showMore": "Xem thêm",
     "showLess": "Thu gọn",
-    "regenerateSummary": "Tạo lại tóm tắt"
+    "regenerateSummary": "Tạo lại tóm tắt",
+    "directMedia": "Media truc tiep",
+    "singleStream": "Mot luong",
+    "segmentedDirect": "Truc tiep {{count}} phan",
+    "openFolder": "Mo thu muc",
+    "outputPath": "Thu muc dau ra"
   },
   "actions": {
     "startDownload": "Bắt đầu tải",
     "stopDownload": "Dừng tải",
     "clearAll": "Xóa tất cả khỏi hàng đợi"
+  },
+  "notifications": {
+    "downloadCompleteTitle": "Tải xuống hoàn tất",
+    "openFileLocation": "Mở vị trí file",
+    "dismiss": "Đóng"
   },
   "schedule": {
     "title": "Hẹn giờ tải",

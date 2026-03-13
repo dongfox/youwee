@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MAX_LOG_LINES = 20000
+SIDECAR_BUILD = '2026-03-05-deadlockfix'
 
 
 def _now_ts() -> float:
@@ -113,16 +115,58 @@ class SidecarManager:
                 "lines": lines,
             }
 
+    def _task_process_poll(self, task: TaskState) -> int | None:
+        proc = task.process
+        if proc is None:
+            return task.exit_code
+        try:
+            polled = proc.poll()
+            if polled is None:
+                return None
+            return int(polled)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _is_task_effectively_running(self, task: TaskState) -> bool:
+        if task.status not in {"starting", "running", "stopping"}:
+            return False
+        if task.process is None:
+            return False
+        return self._task_process_poll(task) is None
+
+    def _finalize_stale_running_task(self, task: TaskState) -> None:
+        if task.status not in {"starting", "running", "stopping"}:
+            return
+
+        polled = self._task_process_poll(task)
+        if polled is not None:
+            task.exit_code = polled
+
+        task.finished_at = task.finished_at or _now_ts()
+        task.process = None
+        task.pid = None
+
+        if task.stop_requested:
+            task.status = "stopped"
+        elif task.exit_code == 0:
+            task.status = "success"
+        elif task.status == "starting":
+            task.status = "error"
+        else:
+            task.status = "failed"
+
     def start_task(self, payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         with self._lock:
             if self._running_task_id:
                 running = self._tasks.get(self._running_task_id)
-                if running and running.status in {"running", "stopping"}:
-                    return False, {
-                        "error": "task_running",
-                        "message": "Another crawler task is already running",
-                        "running_task_id": running.task_id,
-                    }
+                if running is not None:
+                    if self._is_task_effectively_running(running):
+                        return False, {
+                            "error": "task_running",
+                            "message": "Another crawler task is already running",
+                            "running_task_id": running.task_id,
+                        }
+                    self._finalize_stale_running_task(running)
                 self._running_task_id = None
 
         ok, cmd_or_err = self._build_command(payload)
@@ -139,6 +183,10 @@ class SidecarManager:
             self._running_task_id = task_id
 
         try:
+            child_env = os.environ.copy()
+            child_env.setdefault("PYTHONIOENCODING", "utf-8")
+            child_env.setdefault("PYTHONUTF8", "1")
+            child_env.setdefault("PYTHONUNBUFFERED", "1")
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(SCRIPT_DIR),
@@ -148,12 +196,13 @@ class SidecarManager:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                env=child_env,
             )
         except Exception as exc:  # noqa: BLE001
             with task.lock:
                 task.status = "error"
                 task.finished_at = _now_ts()
-                task.append_log(f"[SIDECAR][ERR] failed to start process: {exc}")
+            task.append_log(f"[SIDECAR][ERR] failed to start process: {exc}")
             with self._lock:
                 if self._running_task_id == task_id:
                     self._running_task_id = None
@@ -164,7 +213,7 @@ class SidecarManager:
             task.status = "running"
             task.pid = proc.pid
             task.started_at = _now_ts()
-            task.append_log(f"[SIDECAR] started pid={proc.pid}")
+        task.append_log(f"[SIDECAR] started pid={proc.pid}")
 
         threading.Thread(target=self._pump_output, args=(task,), daemon=True).start()
         threading.Thread(target=self._watch_process, args=(task,), daemon=True).start()
@@ -180,7 +229,7 @@ class SidecarManager:
                 return False, {"error": "not_running", "message": f"Task {task_id} is not running"}
             task.stop_requested = True
             task.status = "stopping"
-            task.append_log("[SIDECAR] stop requested")
+        task.append_log("[SIDECAR] stop requested")
 
         try:
             proc.terminate()
@@ -227,9 +276,10 @@ class SidecarManager:
                 task.status = "success"
             else:
                 task.status = "failed"
-            task.append_log(f"[SIDECAR] process exited code={exit_code} status={task.status}")
+            final_status = task.status
             task.process = None
             task.pid = None
+        task.append_log(f"[SIDECAR] process exited code={exit_code} status={final_status}")
         with self._lock:
             if self._running_task_id == task.task_id:
                 self._running_task_id = None
@@ -257,11 +307,26 @@ class SidecarManager:
             ("timeout", "--timeout"),
             ("retries", "--retries"),
             ("delay", "--delay"),
+            ("host_parallel_limit", "--host-parallel-limit"),
+            ("range_worker_limit", "--range-worker-limit"),
+            ("range_chunk_size_mb", "--range-chunk-size-mb"),
             ("url_queue_file", "--url-queue-file"),
             ("retry_failed_from", "--retry-failed-from"),
+            ("cookies_file", "--cookies-file"),
+            ("login_verify_url", "--login-verify-url"),
+            ("login_fail_action", "--login-fail-action"),
             ("image_types", "--image-types"),
             ("google_photos_log_every", "--google-photos-log-every"),
             ("google_photos_next_selectors", "--google-photos-next-selectors"),
+            ("prefer_type", "--prefer-type"),
+            ("template", "--template"),
+            ("include_url_regex", "--include-url-regex"),
+            ("exclude_url_regex", "--exclude-url-regex"),
+            ("group_by", "--group-by"),
+            ("min_size", "--min-size"),
+            ("max_size", "--max-size"),
+            ("min_resolution", "--min-resolution"),
+            ("max_resolution", "--max-resolution"),
         ]
         for key, flag in value_flags:
             value = payload.get(key)
@@ -276,11 +341,36 @@ class SidecarManager:
             ("js", "--js"),
             ("links_only", "--links-only"),
             ("google_photos_exhaustive", "--google-photos-exhaustive"),
+            ("auto_scope", "--auto-scope"),
+            ("login_verify_before_crawl", "--login-verify-before-crawl"),
+            ("login_capture", "--login-capture"),
+            ("single_stream_downloads", "--single-stream-downloads"),
         ]
         for key, flag in bool_flags:
             raw = payload.get(key, False)
             if bool(raw):
                 cmd.append(flag)
+
+        extra_args = payload.get("extra_args")
+        if extra_args is not None:
+            tokens: list[str] = []
+            if isinstance(extra_args, str):
+                text = extra_args.strip()
+                if text:
+                    try:
+                        tokens = shlex.split(text)
+                    except Exception as exc:  # noqa: BLE001
+                        return False, f"invalid extra_args string: {exc}"
+            elif isinstance(extra_args, list):
+                for item in extra_args:
+                    if item is None:
+                        continue
+                    token = str(item).strip()
+                    if token:
+                        tokens.append(token)
+            else:
+                return False, "extra_args must be string or list"
+            cmd.extend(tokens)
 
         return True, cmd
 
@@ -339,7 +429,17 @@ class SidecarHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query or "")
 
         if path == "/health":
-            self._send_json(200, {"ok": True, "service": "crawler-sidecar", "time": _fmt_ts(_now_ts())})
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "service": "crawler-sidecar",
+                    "time": _fmt_ts(_now_ts()),
+                    "build": SIDECAR_BUILD,
+                    "pid": os.getpid(),
+                    "script": str(Path(__file__).resolve()),
+                },
+            )
             return
 
         if path == "/api/v1/tasks":

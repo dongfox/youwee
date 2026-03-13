@@ -1,7 +1,9 @@
 export { ChannelsPage } from './ChannelsPage';
+export { CrawlerPage } from './CrawlerPage';
 export { DownloadPage } from './DownloadPage';
 export { HistoryPage } from './HistoryPage';
 export { LogsPage } from './LogsPage';
+export { M3uPage } from './M3uPage';
 export { MetadataPage } from './MetadataPage';
 export { ProcessingPage } from './ProcessingPage';
 export { SettingsPage } from './SettingsPage';

@@ -15,6 +15,7 @@ import type {
   CookieSettings,
   LanguageOption,
   ModelOption,
+  ProxyApiStyle,
   ProxySettings,
 } from '@/lib/types';
 
@@ -89,6 +90,7 @@ interface AIContextValue {
   isLoading: boolean;
   isTesting: boolean;
   isGenerating: boolean;
+  isFetchingProviderModels: boolean;
   testResult: { success: boolean; message: string } | null;
   models: ModelOption[];
   languages: LanguageOption[];
@@ -102,6 +104,7 @@ interface AIContextValue {
   generateSummary: (transcript: string, historyId?: string) => Promise<string>;
   fetchTranscript: (url: string) => Promise<string>;
   loadModels: (provider: AIProviderType) => void;
+  fetchProviderModels: () => Promise<void>;
 
   // Background task actions
   startSummaryTask: (historyId: string, url: string) => void;
@@ -117,6 +120,7 @@ const defaultConfig: AIConfig = {
   model: 'gemini-2.0-flash',
   ollama_url: 'http://localhost:11434',
   proxy_url: 'https://api.openai.com',
+  proxy_api_style: 'openai',
   summary_style: 'concise',
   summary_language: 'auto',
   timeout_seconds: 120,
@@ -136,9 +140,9 @@ function getRecommendedModel(models: ModelOption[]): string | null {
 function normalizeAIConfigForTest(input: AIConfig, modelOptions: ModelOption[]): AIConfig {
   const apiKey = input.api_key?.trim() || undefined;
   const rawProxyUrl = input.proxy_url?.trim() || undefined;
+  const proxyApiStyle: ProxyApiStyle = input.proxy_api_style || 'openai';
 
-  let proxyUrl =
-    input.provider === 'proxy' ? (rawProxyUrl || 'https://api.openai.com') : rawProxyUrl;
+  let proxyUrl = input.provider === 'proxy' ? rawProxyUrl || 'https://api.openai.com' : rawProxyUrl;
   if (proxyUrl && !/^https?:\/\//i.test(proxyUrl)) {
     proxyUrl = `https://${proxyUrl}`;
   }
@@ -146,25 +150,22 @@ function normalizeAIConfigForTest(input: AIConfig, modelOptions: ModelOption[]):
   const trimmedModel = input.model?.trim() || '';
   const modelExistsInPreset = modelOptions.some((m) => m.value === trimmedModel);
   const shouldFallbackModel =
-    input.provider !== 'proxy' &&
-    trimmedModel.startsWith('gemini-') &&
-    !modelExistsInPreset;
+    input.provider !== 'proxy' && trimmedModel.startsWith('gemini-') && !modelExistsInPreset;
 
-  const model =
-    !trimmedModel
+  const model = !trimmedModel
+    ? getRecommendedModel(modelOptions) || trimmedModel
+    : shouldFallbackModel
       ? getRecommendedModel(modelOptions) || trimmedModel
-      : shouldFallbackModel
-        ? getRecommendedModel(modelOptions) || trimmedModel
-        : trimmedModel;
+      : trimmedModel;
 
   return {
     ...input,
     api_key: apiKey,
     proxy_url: proxyUrl,
+    proxy_api_style: proxyApiStyle,
     model,
   };
 }
-
 
 const AIContext = createContext<AIContextValue | undefined>(undefined);
 
@@ -173,6 +174,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isTesting, setIsTesting] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isFetchingProviderModels, setIsFetchingProviderModels] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [languages, setLanguages] = useState<LanguageOption[]>([]);
@@ -246,7 +248,6 @@ export function AIProvider({ children }: { children: ReactNode }) {
     });
   }, [config, models]);
 
-
   const updateConfig = useCallback(
     async (updates: Partial<AIConfig>) => {
       const newConfig = { ...config, ...updates };
@@ -270,6 +271,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
     const shouldPersistNormalizedConfig =
       normalizedConfig.api_key !== config.api_key ||
       normalizedConfig.proxy_url !== config.proxy_url ||
+      normalizedConfig.proxy_api_style !== config.proxy_api_style ||
       normalizedConfig.model !== config.model;
 
     if (shouldPersistNormalizedConfig) {
@@ -291,6 +293,61 @@ export function AIProvider({ children }: { children: ReactNode }) {
     }
   }, [config, models]);
 
+  const fetchProviderModels = useCallback(async () => {
+    setIsFetchingProviderModels(true);
+    setTestResult(null);
+
+    const normalizedConfig = normalizeAIConfigForTest(config, models);
+    const shouldPersistNormalizedConfig =
+      normalizedConfig.api_key !== config.api_key ||
+      normalizedConfig.proxy_url !== config.proxy_url ||
+      normalizedConfig.proxy_api_style !== config.proxy_api_style ||
+      normalizedConfig.model !== config.model;
+
+    if (shouldPersistNormalizedConfig) {
+      setConfig(normalizedConfig);
+      try {
+        await invoke('save_ai_config', { config: normalizedConfig });
+      } catch (error) {
+        console.error('Failed to save normalized AI config before model fetch:', error);
+      }
+    }
+
+    try {
+      const providerModels = await invoke<ModelOption[]>('fetch_provider_models', {
+        config: normalizedConfig,
+      });
+
+      if (!providerModels.length) {
+        setTestResult({ success: false, message: 'Provider returned no models.' });
+        return;
+      }
+
+      setModels(providerModels);
+
+      const currentModel = normalizedConfig.model?.trim() || '';
+      const hasCurrentModel = providerModels.some((item) => item.value === currentModel);
+      if (!hasCurrentModel) {
+        const fallbackModel = getRecommendedModel(providerModels) || providerModels[0].value;
+        const nextConfig: AIConfig = { ...normalizedConfig, model: fallbackModel };
+        setConfig(nextConfig);
+        try {
+          await invoke('save_ai_config', { config: nextConfig });
+        } catch (error) {
+          console.error('Failed to save AI config with fetched provider model:', error);
+        }
+      }
+
+      setTestResult({
+        success: true,
+        message: `Loaded ${providerModels.length} model(s) from provider.`,
+      });
+    } catch (error) {
+      setTestResult({ success: false, message: extractErrorMessage(error) });
+    } finally {
+      setIsFetchingProviderModels(false);
+    }
+  }, [config, models]);
   const generateSummary = useCallback(
     async (transcript: string, historyId?: string, title?: string): Promise<string> => {
       setIsGenerating(true);
@@ -608,6 +665,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         isLoading,
         isTesting,
         isGenerating,
+        isFetchingProviderModels,
         testResult,
         models,
         languages,
@@ -617,6 +675,7 @@ export function AIProvider({ children }: { children: ReactNode }) {
         generateSummary,
         fetchTranscript,
         loadModels,
+        fetchProviderModels,
         startSummaryTask,
         startQueueSummaryTask,
         getSummaryTask,

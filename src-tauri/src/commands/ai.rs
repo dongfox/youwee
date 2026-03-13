@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Manager};
 use std::fs;
 use std::path::PathBuf;
-use crate::services::{AIConfig, SummaryStyle, generate_summary, generate_summary_custom, generate_raw, test_connection};
+use crate::services::{AIConfig, SummaryStyle, generate_summary, generate_summary_custom, generate_raw, test_connection, fetch_provider_models as fetch_provider_models_service};
 use crate::database::update_history_summary;
 use crate::types::BackendError;
 
@@ -31,17 +31,17 @@ pub async fn save_ai_config(app: AppHandle, config: AIConfig) -> Result<(), Stri
 #[tauri::command]
 pub async fn get_ai_config(app: AppHandle) -> Result<AIConfig, String> {
     let path = get_config_path(&app)?;
-    
+
     if !path.exists() {
         return Ok(AIConfig::default());
     }
-    
+
     let content = fs::read_to_string(&path)
         .map_err(|e| to_wire_error(format!("Failed to read config: {}", e)))?;
-    
+
     let config: AIConfig = serde_json::from_str(&content)
         .map_err(|e| to_wire_error(format!("Failed to parse config: {}", e)))?;
-    
+
     Ok(config)
 }
 
@@ -60,21 +60,21 @@ pub async fn generate_video_summary(
     title: Option<String>,
 ) -> Result<String, String> {
     let config = get_ai_config(app.clone()).await?;
-    
+
     if !config.enabled {
         return Err(to_wire_error("AI features are disabled. Enable them in Settings."));
     }
-    
+
     let result = generate_summary(&config, &transcript, title.as_deref())
         .await
         .map_err(|e| to_wire_error(e.to_string()))?;
-    
+
     // If history_id is provided, save summary to database
     if let Some(id) = history_id {
         update_history_summary(id, result.summary.clone())
             .map_err(to_wire_error)?;
     }
-    
+
     Ok(result.summary)
 }
 
@@ -88,11 +88,11 @@ pub async fn generate_summary_with_options(
     title: Option<String>,
 ) -> Result<SummaryResult, String> {
     let config = get_ai_config(app.clone()).await?;
-    
+
     if !config.enabled {
         return Err(to_wire_error("AI features are disabled. Enable them in Settings."));
     }
-    
+
     // Parse style string to enum
     let summary_style = match style.to_lowercase().as_str() {
         "short" => SummaryStyle::Short,
@@ -100,11 +100,11 @@ pub async fn generate_summary_with_options(
         "detailed" => SummaryStyle::Detailed,
         _ => SummaryStyle::Concise,
     };
-    
+
     let result = generate_summary_custom(&config, &transcript, &summary_style, &language, title.as_deref())
         .await
         .map_err(|e| to_wire_error(e.to_string()))?;
-    
+
     Ok(SummaryResult {
         summary: result.summary,
     })
@@ -176,6 +176,22 @@ pub fn get_ai_models(provider: String) -> Vec<ModelOption> {
     }
 }
 
+/// Fetch available models directly from provider API
+#[tauri::command]
+pub async fn fetch_provider_models(config: AIConfig) -> Result<Vec<ModelOption>, String> {
+    let models = fetch_provider_models_service(&config)
+        .await
+        .map_err(|e| to_wire_error(e.to_string()))?;
+
+    Ok(models
+        .into_iter()
+        .map(|model| ModelOption {
+            value: model.clone(),
+            label: model,
+        })
+        .collect())
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelOption {
     pub value: String,
@@ -214,16 +230,14 @@ pub async fn generate_ai_response(
     prompt: String,
 ) -> Result<String, String> {
     let config = get_ai_config(app).await?;
-    
+
     if !config.enabled {
         return Err(to_wire_error("AI features are disabled. Enable them in Settings."));
     }
-    
+
     let result = generate_raw(&config, &prompt)
         .await
         .map_err(|e| to_wire_error(format!("AI generation failed: {}", e)))?;
-    
+
     Ok(result.summary)
 }
-
-

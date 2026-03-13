@@ -5,6 +5,11 @@ import { defineConfig } from 'vite';
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    host: '127.0.0.1',
+    port: 9981,
+    strictPort: false,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -40,6 +45,8 @@ export default defineConfig({
             '@tauri-apps/plugin-updater',
           ],
           'vendor-icons': ['lucide-react'],
+          'vendor-hls': ['hls.js'],
+          'vendor-i18n': ['react-i18next', 'i18next'],
         },
       },
     },

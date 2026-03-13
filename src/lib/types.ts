@@ -76,6 +76,7 @@ export interface ItemUniversalSettings {
   autoRetryEnabled: boolean;
   autoRetryMaxAttempts: number;
   autoRetryDelaySeconds: number;
+  directMediaSegments?: number;
 }
 
 export interface DownloadRetryState {
@@ -88,12 +89,14 @@ export interface DownloadRetryState {
 export interface DownloadItem {
   id: string;
   url: string;
+  dedupeKey?: string;
   title: string;
   status: 'pending' | 'fetching' | 'downloading' | 'completed' | 'error';
   progress: number;
   speed: string;
   eta: string;
   error?: string;
+  completedFilepath?: string;
   isPlaylist?: boolean;
   isLive?: boolean; // true if video is currently live streaming
   downloadedSize?: string; // For live streams: "2.87 MiB"
@@ -101,6 +104,7 @@ export interface DownloadItem {
   playlistIndex?: number;
   playlistTotal?: number;
   thumbnail?: string;
+  refererUrl?: string;
   duration?: string;
   channel?: string;
   filesize?: number; // File size in bytes from video info
@@ -171,6 +175,7 @@ export interface DownloadProgress {
   eta: string;
   status: string;
   title?: string;
+  filepath?: string;
   playlist_index?: number;
   playlist_count?: number;
   // Additional info for completed downloads
@@ -299,6 +304,7 @@ export type HistorySort = 'recent' | 'oldest' | 'title' | 'size';
 
 // AI types
 export type AIProvider = 'gemini' | 'openai' | 'deepseek' | 'qwen' | 'ollama' | 'proxy';
+export type ProxyApiStyle = 'openai' | 'openai_responses' | 'newapi';
 export type SummaryStyle = 'short' | 'concise' | 'detailed';
 
 // Network Proxy types
@@ -345,6 +351,7 @@ export interface AIConfig {
   model: string;
   ollama_url?: string;
   proxy_url?: string; // Custom OpenAI-compatible API endpoint
+  proxy_api_style?: ProxyApiStyle; // Endpoint style for proxy provider
   summary_style: SummaryStyle;
   summary_language: string;
   timeout_seconds?: number; // Timeout for AI generation (default 120s)

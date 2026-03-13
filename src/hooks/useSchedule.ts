@@ -1,9 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from '@tauri-apps/plugin-notification';
+import { isPermissionGranted, sendNotification } from '@tauri-apps/plugin-notification';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface ScheduleConfig {
@@ -70,11 +66,7 @@ export function formatTime(timestamp: number): string {
 /** Send a desktop notification (fire-and-forget, never throws) */
 async function notify(title: string, body: string) {
   try {
-    let granted = await isPermissionGranted();
-    if (!granted) {
-      const permission = await requestPermission();
-      granted = permission === 'granted';
-    }
+    const granted = await isPermissionGranted();
     if (granted) {
       sendNotification({ title, body });
     }

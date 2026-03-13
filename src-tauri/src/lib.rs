@@ -118,22 +118,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // Close-to-tray: hide window instead of quitting
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
-
-                // macOS: optionally hide the dock icon too
-                #[cfg(target_os = "macos")]
-                if HIDE_DOCK_ON_CLOSE.load(Ordering::SeqCst) {
-                    let _ = window.app_handle().set_activation_policy(tauri::ActivationPolicy::Accessory);
-                }
+        .on_window_event(|_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Treat window close as full app exit in this build.
+                services::polling::stop_polling();
+                let _ = commands::crawler_sidecar_stop_service();
             }
         })
         .invoke_handler(tauri::generate_handler![
             // Download commands
             commands::download_video,
+            commands::download_direct_media,
             commands::stop_download,
             // Video info commands
             commands::get_video_info,
@@ -190,6 +185,7 @@ pub fn run() {
             commands::generate_summary_with_options,
             commands::generate_ai_response,
             commands::get_ai_models,
+            commands::fetch_provider_models,
             commands::get_summary_languages,
             // Processing commands
             commands::get_video_metadata,
@@ -237,6 +233,11 @@ pub fn run() {
             commands::set_polling_network_config,
             // External deep-link commands
             commands::consume_pending_external_links,
+            commands::inspect_http_url,
+            commands::fetch_text_url,
+            commands::fetch_binary_url,
+            commands::resolve_page_stream,
+            commands::resolve_avjb_page,
             // Crawler sidecar commands (stage-1 integration)
             commands::crawler_sidecar_attach,
             commands::crawler_sidecar_status,
@@ -269,8 +270,9 @@ pub fn run() {
                     }
                 }
                 tauri::RunEvent::ExitRequested { .. } => {
-                    // Stop polling on exit
+                    // Stop polling and sidecar on exit.
                     services::polling::stop_polling();
+                    let _ = commands::crawler_sidecar_stop_service();
                 }
                 _ => {}
             }
@@ -476,3 +478,10 @@ fn rebuild_tray_menu_inner(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn 
 
     Ok(())
 }
+
+
+
+
+
+
+

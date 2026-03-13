@@ -8,14 +8,18 @@
 
 use std::process::Stdio;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::utils::validate_url;
 use tauri::{AppHandle, Emitter};
+use futures_util::StreamExt;
+use reqwest::header::{ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_TYPE, RANGE, REFERER, USER_AGENT};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::types::{BackendError, DependencySource, DownloadProgress};
@@ -572,6 +576,7 @@ pub async fn download_video(
                                 eta,
                                 status: "downloading".to_string(),
                                 title: current_title.clone(),
+                                filepath: None,
                                 playlist_index: current_index,
                                 playlist_count: total_count,
                                 filesize: None,
@@ -602,6 +607,7 @@ pub async fn download_video(
                                 eta,
                                 status: "downloading".to_string(),
                                 title: current_title.clone(),
+                                filepath: None,
                                 playlist_index: current_index,
                                 playlist_count: total_count,
                                 filesize: None,
@@ -719,6 +725,7 @@ pub async fn download_video(
                                 eta: String::new(),
                                 status: "finished".to_string(),
                                 title: display_title,
+                                filepath: final_filepath.clone(),
                                 playlist_index: current_index,
                                 playlist_count: total_count,
                                 filesize: reported_filesize,
@@ -745,6 +752,7 @@ pub async fn download_video(
                                 eta: String::new(),
                                 status: "error".to_string(),
                                 title: current_title.clone(),
+                                filepath: None,
                                 playlist_index: current_index,
                                 playlist_count: total_count,
                                 filesize: None,
@@ -892,6 +900,7 @@ async fn handle_tokio_download(
                         eta,
                         status: "downloading".to_string(),
                         title: None,
+                        filepath: None,
                         playlist_index: pi,
                         playlist_count: pc,
                         filesize: None,
@@ -950,6 +959,7 @@ async fn handle_tokio_download(
                 eta,
                 status: "downloading".to_string(),
                 title: current_title.clone(),
+                filepath: None,
                 playlist_index: current_index,
                 playlist_count: total_count,
                 filesize: None,
@@ -1126,6 +1136,7 @@ async fn handle_tokio_download(
             eta: String::new(),
             status: "finished".to_string(),
             title: display_title,
+            filepath: final_filepath.clone(),
             playlist_index: current_index,
             playlist_count: total_count,
             filesize: reported_filesize,
@@ -1152,6 +1163,7 @@ async fn handle_tokio_download(
             eta: String::new(),
             status: "error".to_string(),
             title: current_title,
+            filepath: None,
             playlist_index: current_index,
             playlist_count: total_count,
             filesize: None,
@@ -1169,6 +1181,578 @@ async fn handle_tokio_download(
     }
 }
 
+fn sanitize_filename_component(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .map(|ch| match ch {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            _ => ch,
+        })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches('.').trim();
+    if cleaned.is_empty() {
+        "media".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn split_filename_parts(value: &str) -> (String, Option<String>) {
+    let sanitized = sanitize_filename_component(value);
+    if let Some((stem, ext)) = sanitized.rsplit_once('.') {
+        if !stem.is_empty() && !ext.is_empty() && ext.len() <= 8 {
+            return (sanitize_filename_component(stem), Some(ext.to_ascii_lowercase()));
+        }
+    }
+    (sanitized, None)
+}
+
+fn extension_from_content_type(content_type: &str) -> Option<&'static str> {
+    let normalized = content_type.split(';').next()?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/bmp" => Some("bmp"),
+        "image/svg+xml" => Some("svg"),
+        "image/avif" => Some("avif"),
+        "video/mp4" => Some("mp4"),
+        "video/webm" => Some("webm"),
+        "video/quicktime" => Some("mov"),
+        "video/x-m4v" => Some("m4v"),
+        "audio/mpeg" => Some("mp3"),
+        "audio/mp4" | "audio/x-m4a" => Some("m4a"),
+        "audio/aac" => Some("aac"),
+        "audio/ogg" => Some("ogg"),
+        "audio/opus" => Some("opus"),
+        "audio/wav" | "audio/x-wav" => Some("wav"),
+        "audio/flac" => Some("flac"),
+        "audio/webm" => Some("weba"),
+        _ => None,
+    }
+}
+
+fn extension_from_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let file_name = parsed.path_segments()?.last()?;
+    let trimmed = file_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (_, ext) = split_filename_parts(trimmed);
+    ext
+}
+
+fn filename_from_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let file_name = parsed.path_segments()?.last()?;
+    let trimmed = file_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn filename_from_content_disposition(value: &str) -> Option<String> {
+    for part in value.split(';') {
+        let trimmed = part.trim();
+        if let Some(rest) = trimmed.strip_prefix("filename=") {
+            let candidate = rest.trim().trim_matches('"');
+            if !candidate.is_empty() {
+                return Some(candidate.to_string());
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("filename*=UTF-8''") {
+            let candidate = rest.trim().trim_matches('"').replace("%20", " ");
+            if !candidate.is_empty() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn ensure_unique_output_path(base_dir: &str, file_name: &str) -> PathBuf {
+    let mut candidate = Path::new(base_dir).join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "media".to_string());
+    let ext = path.extension().and_then(|s| s.to_str()).map(|s| s.to_string());
+
+    for index in 1..10000 {
+        let next_name = match ext.as_deref() {
+            Some(ext) if !ext.is_empty() => format!("{} ({}).{}", stem, index, ext),
+            _ => format!("{} ({})", stem, index),
+        };
+        candidate = Path::new(base_dir).join(next_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    Path::new(base_dir).join(file_name)
+}
+
+fn format_eta_label(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    let secs = seconds % 60;
+    if minutes >= 60 {
+        let hours = minutes / 60;
+        let rem_minutes = minutes % 60;
+        format!("{:02}:{:02}:{:02}", hours, rem_minutes, secs)
+    } else {
+        format!("{:02}:{:02}", minutes, secs)
+    }
+}
+
+fn format_speed_label(bytes_per_second: f64) -> String {
+    if bytes_per_second <= 0.0 {
+        String::new()
+    } else {
+        format!("{}/s", format_size(bytes_per_second as u64))
+    }
+}
+
+fn build_direct_filename(
+    url: &str,
+    title: Option<&str>,
+    content_disposition: Option<&str>,
+    content_type: Option<&str>,
+    id: &str,
+) -> (String, String) {
+    let disposition_name = content_disposition.and_then(filename_from_content_disposition);
+    let title_name = title
+        .filter(|value| !value.trim().is_empty() && !value.starts_with("http://") && !value.starts_with("https://"))
+        .map(|value| value.trim().to_string());
+    let url_name = filename_from_url(url);
+
+    let preferred = disposition_name
+        .or(title_name)
+        .or(url_name)
+        .unwrap_or_else(|| format!("media-{}", id));
+
+    let (stem, explicit_ext) = split_filename_parts(&preferred);
+    let ext = explicit_ext
+        .or_else(|| content_type.and_then(extension_from_content_type).map(|value| value.to_string()))
+        .or_else(|| extension_from_url(url))
+        .unwrap_or_else(|| "bin".to_string());
+
+    (format!("{}.{}", stem, ext), ext)
+}
+
+fn is_non_media_content_type(content_type: &str) -> bool {
+    let normalized = content_type.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    normalized.starts_with("text/html")
+        || normalized.starts_with("application/json")
+        || normalized.starts_with("text/plain")
+}
+
+fn should_use_ranged_direct_download(total_size: Option<u64>, accept_ranges: Option<&str>) -> bool {
+    matches!(total_size, Some(size) if size >= 8 * 1024 * 1024)
+        && accept_ranges
+            .map(|value| value.to_ascii_lowercase().contains("bytes"))
+            .unwrap_or(false)
+}
+
+fn build_direct_ranges(total_size: u64, max_segments: Option<u8>) -> Vec<(u64, u64)> {
+    if total_size < 8 * 1024 * 1024 {
+        return vec![(0, total_size.saturating_sub(1))];
+    }
+
+    let auto_part_count = if total_size >= 64 * 1024 * 1024 {
+        4
+    } else if total_size >= 24 * 1024 * 1024 {
+        3
+    } else {
+        2
+    };
+    let part_count = max_segments
+        .map(|value| value.clamp(1, 4) as usize)
+        .unwrap_or(auto_part_count);
+    let chunk_size = (total_size / part_count as u64).max(1);
+    let mut ranges = Vec::with_capacity(part_count);
+    let mut start = 0u64;
+
+    for index in 0..part_count {
+        let end = if index == part_count - 1 {
+            total_size.saturating_sub(1)
+        } else {
+            (start + chunk_size).saturating_sub(1).min(total_size.saturating_sub(1))
+        };
+        ranges.push((start, end));
+        start = end.saturating_add(1);
+    }
+
+    ranges
+}
+
+fn build_direct_part_path(output_file: &Path, index: usize) -> PathBuf {
+    PathBuf::from(format!("{}.part{}", output_file.to_string_lossy(), index))
+}
+
+async fn cleanup_direct_part_files(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+}
+
+fn build_direct_progress(
+    id: &str,
+    title: &str,
+    downloaded: u64,
+    total_size: Option<u64>,
+    started: Instant,
+    format_ext: &str,
+) -> DownloadProgress {
+    let elapsed = started.elapsed().as_secs_f64().max(0.001);
+    let speed_bps = downloaded as f64 / elapsed;
+    let percent = total_size
+        .map(|size| ((downloaded as f64 / size.max(1) as f64) * 100.0).min(100.0))
+        .unwrap_or(0.0);
+    let eta = total_size
+        .and_then(|size| {
+            if speed_bps <= 0.0 || downloaded >= size {
+                None
+            } else {
+                Some(format_eta_label(((size - downloaded) as f64 / speed_bps).ceil() as u64))
+            }
+        })
+        .unwrap_or_default();
+
+    DownloadProgress {
+        id: id.to_string(),
+        percent,
+        speed: format_speed_label(speed_bps),
+        eta,
+        status: "downloading".to_string(),
+        title: Some(title.to_string()),
+        filepath: None,
+        playlist_index: None,
+        playlist_count: None,
+        filesize: total_size,
+        resolution: None,
+        format_ext: Some(format_ext.to_string()),
+        error_message: None,
+        error_code: None,
+        error_params: None,
+        downloaded_size: None,
+        elapsed_time: None,
+    }
+}
+
+async fn download_direct_range_part(
+    client: reqwest::Client,
+    url: String,
+    referer_url: Option<String>,
+    part_path: PathBuf,
+    start: u64,
+    end: u64,
+    progress: Arc<AtomicU64>,
+) -> Result<(), String> {
+    let mut request = client
+        .get(&url)
+        .header(USER_AGENT, "Mozilla/5.0 Youwee/0.11.1")
+        .header(RANGE, format!("bytes={}-{}", start, end));
+    if let Some(referer) = referer_url.as_deref() {
+        request = request.header(REFERER, referer);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| BackendError::from_message(format!("Direct media range request failed: {}", e)).to_wire_string())?;
+
+    if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(BackendError::from_message(format!("Direct media range request not supported: {}", response.status())).to_wire_string());
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(&part_path)
+        .await
+        .map_err(|e| BackendError::from_message(format!("Failed to create part file: {}", e)).to_wire_string())?;
+
+    while let Some(chunk) = stream.next().await {
+        if CANCEL_FLAG.load(Ordering::SeqCst) {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            return Err(BackendError::from_message("Download cancelled").to_wire_string());
+        }
+
+        let chunk = chunk
+            .map_err(|e| BackendError::from_message(format!("Direct media stream failed: {}", e)).to_wire_string())?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| BackendError::from_message(format!("Failed to write part file: {}", e)).to_wire_string())?;
+        progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+    }
+
+    file.flush()
+        .await
+        .map_err(|e| BackendError::from_message(format!("Failed to finalize part file: {}", e)).to_wire_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn download_direct_media(
+    app: AppHandle,
+    id: String,
+    url: String,
+    output_path: String,
+    title: Option<String>,
+    thumbnail: Option<String>,
+    source: Option<String>,
+    proxy_url: Option<String>,
+    referer_url: Option<String>,
+    max_segments: Option<u8>,
+) -> Result<(), String> {
+    CANCEL_FLAG.store(false, Ordering::SeqCst);
+    validate_url(&url).map_err(|e| BackendError::from_message(e).to_wire_string())?;
+
+    let sanitized_path =
+        sanitize_output_path(&output_path).map_err(|e| BackendError::from_message(e).to_wire_string())?;
+
+    let mut client_builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(10));
+    if let Some(proxy) = proxy_url.as_ref() {
+        if !proxy.is_empty() {
+            client_builder = client_builder.proxy(
+                reqwest::Proxy::all(proxy)
+                    .map_err(|e| BackendError::from_message(format!("Invalid proxy URL: {}", e)).to_wire_string())?,
+            );
+        }
+    }
+    let client = client_builder
+        .build()
+        .map_err(|e| BackendError::from_message(format!("Failed to build HTTP client: {}", e)).to_wire_string())?;
+
+    let referer_value = referer_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let mut request = client
+        .get(&url)
+        .header(USER_AGENT, "Mozilla/5.0 Youwee/0.11.1");
+    if let Some(referer) = referer_value.as_deref() {
+        request = request.header(REFERER, referer);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| BackendError::from_message(format!("Direct media request failed: {}", e)).to_wire_string())?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(BackendError::from_message(format!("Direct media request failed with status {}", status)).to_wire_string());
+    }
+
+    let headers = response.headers().clone();
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    if let Some(content_type) = content_type.as_deref() {
+        if is_non_media_content_type(content_type) {
+            return Err(BackendError::from_message(format!("Direct URL returned non-media content: {}", content_type)).to_wire_string());
+        }
+    }
+
+    let content_disposition = headers
+        .get(CONTENT_DISPOSITION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    let accept_ranges = headers
+        .get(ACCEPT_RANGES)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    let total_size = response.content_length();
+    let (file_name, format_ext) = build_direct_filename(
+        &url,
+        title.as_deref(),
+        content_disposition.as_deref(),
+        content_type.as_deref(),
+        &id,
+    );
+    let output_file = ensure_unique_output_path(&sanitized_path, &file_name);
+    let display_title = title
+        .filter(|value| !value.starts_with("http://") && !value.starts_with("https://") && !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            output_file
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("media")
+                .to_string()
+        });
+
+    let started = Instant::now();
+
+    if should_use_ranged_direct_download(total_size, accept_ranges.as_deref()) {
+        drop(response);
+        let total_bytes = total_size.unwrap_or_default();
+        let ranges = build_direct_ranges(total_bytes, max_segments);
+        let part_paths: Vec<PathBuf> = ranges
+            .iter()
+            .enumerate()
+            .map(|(index, _)| build_direct_part_path(&output_file, index))
+            .collect();
+        let downloaded = Arc::new(AtomicU64::new(0));
+        let mut handles = Vec::with_capacity(ranges.len());
+
+        for (index, (start, end)) in ranges.iter().enumerate() {
+            let client = client.clone();
+            let url = url.clone();
+            let part_path = part_paths[index].clone();
+            let progress = downloaded.clone();
+            let referer_url = referer_value.clone();
+            let start = *start;
+            let end = *end;
+            handles.push(tokio::spawn(async move {
+                download_direct_range_part(client, url, referer_url, part_path, start, end, progress).await
+            }));
+        }
+
+        let mut join_all = Box::pin(futures_util::future::try_join_all(handles));
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        let part_result: Result<Vec<Result<(), String>>, _> = loop {
+            tokio::select! {
+                result = &mut join_all => break result,
+                _ = interval.tick() => {
+                    let payload = build_direct_progress(
+                        &id,
+                        &display_title,
+                        downloaded.load(Ordering::Relaxed),
+                        total_size,
+                        started,
+                        &format_ext,
+                    );
+                    app.emit("download-progress", payload).ok();
+                }
+            }
+        };
+
+        match part_result {
+            Ok(results) => {
+                for result in results {
+                    if let Err(error) = result {
+                        cleanup_direct_part_files(&part_paths).await;
+                        return Err(error);
+                    }
+                }
+            }
+            Err(error) => {
+                cleanup_direct_part_files(&part_paths).await;
+                return Err(BackendError::from_message(format!("Direct media task failed: {}", error)).to_wire_string());
+            }
+        }
+
+        let mut final_file = tokio::fs::File::create(&output_file)
+            .await
+            .map_err(|e| BackendError::from_message(format!("Failed to create output file: {}", e)).to_wire_string())?;
+        for part_path in &part_paths {
+            let mut part_file = tokio::fs::File::open(part_path)
+                .await
+                .map_err(|e| BackendError::from_message(format!("Failed to open part file: {}", e)).to_wire_string())?;
+            tokio::io::copy(&mut part_file, &mut final_file)
+                .await
+                .map_err(|e| BackendError::from_message(format!("Failed to merge part file: {}", e)).to_wire_string())?;
+        }
+        final_file.flush()
+            .await
+            .map_err(|e| BackendError::from_message(format!("Failed to finalize output file: {}", e)).to_wire_string())?;
+        cleanup_direct_part_files(&part_paths).await;
+    } else {
+        let mut stream = response.bytes_stream();
+        let mut file = tokio::fs::File::create(&output_file)
+            .await
+            .map_err(|e| BackendError::from_message(format!("Failed to create output file: {}", e)).to_wire_string())?;
+        let mut last_emit = Instant::now();
+        let mut downloaded: u64 = 0;
+
+        while let Some(chunk) = stream.next().await {
+            if CANCEL_FLAG.load(Ordering::SeqCst) {
+                let _ = tokio::fs::remove_file(&output_file).await;
+                return Err(BackendError::from_message("Download cancelled").to_wire_string());
+            }
+
+            let chunk = chunk
+                .map_err(|e| BackendError::from_message(format!("Direct media stream failed: {}", e)).to_wire_string())?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| BackendError::from_message(format!("Failed to write output file: {}", e)).to_wire_string())?;
+            downloaded += chunk.len() as u64;
+
+            if last_emit.elapsed() >= Duration::from_millis(250) {
+                let payload = build_direct_progress(
+                    &id,
+                    &display_title,
+                    downloaded,
+                    total_size,
+                    started,
+                    &format_ext,
+                );
+                app.emit("download-progress", payload).ok();
+                last_emit = Instant::now();
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| BackendError::from_message(format!("Failed to finalize output file: {}", e)).to_wire_string())?;
+    }
+
+    let actual_size = tokio::fs::metadata(&output_file)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    let filepath = output_file.to_string_lossy().to_string();
+    let success_message = format!("Downloaded: {}", display_title);
+    let details = format!("Size: {} · Format: {}", format_size(actual_size), format_ext);
+    add_log_internal("success", &success_message, Some(&details), Some(&url)).ok();
+    add_history_internal(
+        url.clone(),
+        display_title.clone(),
+        thumbnail,
+        filepath.clone(),
+        Some(actual_size),
+        None,
+        Some("Original".to_string()),
+        Some(format_ext.clone()),
+        source.or_else(|| Some("direct-media".to_string())),
+        None,
+    ).ok();
+    app.emit(
+        "download-progress",
+        DownloadProgress {
+            id,
+            percent: 100.0,
+            speed: String::new(),
+            eta: String::new(),
+            status: "finished".to_string(),
+            title: Some(display_title),
+            filepath: Some(filepath),
+            playlist_index: None,
+            playlist_count: None,
+            filesize: Some(actual_size),
+            resolution: None,
+            format_ext: Some(format_ext),
+            error_message: None,
+            error_code: None,
+            error_params: None,
+            downloaded_size: None,
+            elapsed_time: None,
+        },
+    ).ok();
+    Ok(())
+}
 #[tauri::command]
 pub async fn stop_download() -> Result<(), String> {
     CANCEL_FLAG.store(true, Ordering::SeqCst);
@@ -1212,3 +1796,5 @@ fn generate_thumbnail_url(url: &str) -> Option<String> {
         None
     }
 }
+
+

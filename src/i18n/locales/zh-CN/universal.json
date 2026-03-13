@@ -46,7 +46,11 @@
     "liveFromStart": "从头开始录制直播",
     "autoRetry": "自动重试",
     "retryAttempts": "次数",
-    "retryDelaySeconds": "间隔（秒）"
+    "retryDelaySeconds": "间隔（秒）",
+    "directMediaSegments": "直链下载分段",
+    "directMediaSegmentsSingle": "单连接",
+    "directMediaSegmentsValue": "{{count}} 段",
+    "openOutputFolder": "打开输出目录"
   },
   "quality": {
     "360": "低清 360p",
@@ -103,12 +107,22 @@
     "generating": "生成中...",
     "showMore": "展开",
     "showLess": "收起",
-    "regenerateSummary": "重新生成摘要"
+    "regenerateSummary": "重新生成摘要",
+    "directMedia": "直链媒体",
+    "singleStream": "单连接",
+    "segmentedDirect": "{{count}} 段直连",
+    "openFolder": "打开所在文件夹",
+    "outputPath": "输出目录"
   },
   "actions": {
     "startDownload": "开始下载",
     "stopDownload": "停止下载",
     "clearAll": "清空队列中的所有项目"
+  },
+  "notifications": {
+    "downloadCompleteTitle": "下载已完成",
+    "openFileLocation": "打开文件位置",
+    "dismiss": "关闭"
   },
   "schedule": {
     "title": "定时下载",

@@ -553,7 +553,7 @@ export function SettingsPanel({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {[1, 2, 3, 4, 5].map((n) => (
+                      {[1, 2, 3, 4, 5, 6, 8, 10].map((n) => (
                         <SelectItem key={n} value={String(n)} className="text-xs">
                           {t('settings.atATime', { count: n })}
                         </SelectItem>

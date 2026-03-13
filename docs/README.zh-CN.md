@@ -133,6 +133,11 @@ bun run tauri build
 - **下载器**: yt-dlp（内置）
 - **构建**: Bun、Vite
 
+## 开发文档
+
+- 架构与构建说明（中文）：[ARCHITECTURE.zh-CN.md](ARCHITECTURE.zh-CN.md)
+- Architecture & Build Guide (English): [ARCHITECTURE.md](ARCHITECTURE.md)
+- AGENTS 规则（中文）：[AGENTS.zh-CN.md](AGENTS.zh-CN.md)
 ## 贡献
 
 欢迎贡献，详情见[贡献指南](CONTRIBUTING.zh-CN.md)。
