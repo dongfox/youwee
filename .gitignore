@@ -39,3 +39,5 @@ build/
 *.dmg
 *.app
 scripts/output/
+.npm-cache/
+scripts/crawler_state.db
